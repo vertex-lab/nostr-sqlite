@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -58,11 +60,16 @@ const schema = `
 
 // Store of Nostr events that uses an sqlite3 database.
 // It embeds the *sql.DB connection for direct interaction and manages optional validators and query builders.
-// All methods are safe for concurrent use. Keep in mind however, that sqlite can only have one concurrent writer.
+// All methods are safe for concurrent use.
+//
+// Keep in mind however, that sqlite can only have one concurrent writer.
 // The way we handle it is retrying write operations up to [Store.retries] times on the error "database is locked".
 type Store struct {
 	*sql.DB
 	retries int // the maximum number of retries after a write failure "database is locked"
+
+	optimizeEvery int32        // the threshold of writes that trigger PRAGMA optimize
+	writeCount    atomic.Int32 // successful writes since last PRAGMA optimize
 
 	filterPolicy FilterPolicy
 	eventPolicy  EventPolicy
@@ -83,23 +90,27 @@ func New(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
 
+	store := &Store{
+		DB:            DB,
+		optimizeEvery: 5000,
+		filterPolicy:  defaultFilterPolicy,
+		eventPolicy:   defaultEventPolicy,
+		queryBuilder:  DefaultQueryBuilder,
+		countBuilder:  DefaultCountBuilder,
+	}
+
+	for _, opt := range opts {
+		if err := opt(store); err != nil {
+			return nil, err
+		}
+	}
+
 	if _, err := DB.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
 	}
 
-	store := &Store{
-		DB:           DB,
-		filterPolicy: defaultFilterPolicy,
-		eventPolicy:  defaultEventPolicy,
-		queryBuilder: DefaultQueryBuilder,
-		countBuilder: DefaultCountBuilder,
-	}
-
-	for _, opt := range opts {
-		err := opt(store)
-		if err != nil {
-			return nil, err
-		}
+	if _, err := DB.Exec("PRAGMA optimize=0x10002;"); err != nil {
+		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
 	return store, nil
 }
@@ -147,6 +158,22 @@ func (s *Store) withRetries(op func() error) error {
 	return fmt.Errorf("database is locked: performed (%d) attempts", s.retries+1)
 }
 
+// Optimize runs "PRAGMA optimize" if the writes are greater than the optimizeEvery threshold.
+func (s *Store) optimizeIfNeeded(ctx context.Context) {
+	if s.writeCount.Load() > s.optimizeEvery {
+		_, err := s.DB.ExecContext(ctx, "PRAGMA optimize;")
+		if err != nil && ctx.Err() == nil {
+			slog.Warn("nostr-sqlite: failed to PRAGMA optimize", "error", err)
+			return
+		}
+
+		s.writeCount.Store(0)
+	}
+}
+
+// Save the event in the store. Save is idempotent, meaning successful calls to Save
+// with the same event are no-ops.
+// For replaceable/addressable event, it is recommended to call [Store.Replace] instead.
 func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
 	if err := s.eventPolicy(e); err != nil {
 		return err
@@ -154,33 +181,71 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
 
 	tags, err := json.Marshal(e.Tags)
 	if err != nil {
-		return fmt.Errorf("failed to marshal the tags of event with ID %s: %w", e.ID, err)
+		return fmt.Errorf("failed to marshal the tags: %w", err)
 	}
 
+	saved := false
 	err = s.withRetries(func() error {
-		_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
+		res, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
         VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID, e.PubKey, e.CreatedAt, e.Kind, tags, e.Content, e.Sig)
-		return err
+
+		if err != nil {
+			return err
+		}
+
+		rows, _ := res.RowsAffected()
+		saved = rows > 0
+		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to save event with ID %s: %w", e.ID, err)
+		return fmt.Errorf("failed to save event: %w", err)
+	}
+
+	if saved {
+		s.writeCount.Add(1)
+		s.optimizeIfNeeded(ctx)
 	}
 	return nil
 }
 
+// Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
 func (s *Store) Delete(ctx context.Context, id string) error {
+	deleted := false
 	err := s.withRetries(func() error {
-		_, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
-		return err
+		res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
+		if err != nil {
+			return err
+		}
+
+		rows, _ := res.RowsAffected()
+		deleted = rows > 0
+		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to delete event with ID %s: %w", id, err)
+		return fmt.Errorf("failed to delete event: %w", err)
+	}
+
+	if deleted {
+		s.writeCount.Add(1)
+		s.optimizeIfNeeded(ctx)
 	}
 	return nil
 }
 
+// Replace an old event with the new one according to NIP-01.
+//
+// The replacement happens if the event is strictly newer than the stored event
+// within the same 'category' (kind, pubkey, and d-tag if addressable).
+// If no such stored event exists, and the event is a replaceable/addressable kind, it is simply saved.
+//
+// Calling Replace on a non-replaceable/addressable event returns [ErrInvalidReplacement]
+//
+// Replace returns true if the event has been saved/superseded a previous one,
+// false in case of errors or if a stored event in the same 'category' is newer or equal.
+//
+// More info here: https://github.com/nostr-protocol/nips/blob/master/01.md#kinds
 func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 	if err := s.eventPolicy(event); err != nil {
 		return false, err
@@ -262,6 +327,7 @@ func (s *Store) replace(ctx context.Context, new *nostr.Event, id string) error 
 	})
 }
 
+// Query stored events matching the provided filters.
 func (s *Store) Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error) {
 	return s.QueryWithBuilder(ctx, s.queryBuilder, filters...)
 }
@@ -306,6 +372,7 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 	return events, nil
 }
 
+// Count stored events matching the provided filters.
 func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, error) {
 	return s.CountWithBuilder(ctx, s.countBuilder, filters...)
 }

@@ -15,13 +15,24 @@ var (
 type Option func(*Store) error
 
 // WithRetries sets how many times to retry a locked database operation
-// after the first failed attempt. Each retry waits 20ms + jitter (~5ms on average).
+// after the first failed attempt. Each retry waits 1ms + jitter (~5ms on average).
 func WithRetries(n int) Option {
 	return func(s *Store) error {
 		if n < 0 {
 			return errors.New("number of retries must be non-negative")
 		}
 		s.retries = n
+		return nil
+	}
+}
+
+// WithOptimisationEvery sets how many writes trigger a PRAGMA optimize operation.
+func WithOptimisationEvery(n int) Option {
+	return func(s *Store) error {
+		if n < 0 {
+			return errors.New("number of write before PRAGMA optimize must be non-negative")
+		}
+		s.optimizeEvery = int32(n)
 		return nil
 	}
 }
