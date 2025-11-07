@@ -3,10 +3,50 @@ package sqlite
 import (
 	"context"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
 )
+
+func TestConcurrency(t *testing.T) {
+	size := 10_000
+	ctx := context.Background()
+	path := t.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wg := &sync.WaitGroup{}
+	done := make(chan struct{})
+	errC := make(chan error, size)
+
+	go func() {
+		wg.Add(size)
+		for i := range size {
+			go func(i int) {
+				defer wg.Done()
+				event := nostr.Event{Kind: i}
+				err := store.Save(ctx, &event)
+				if err != nil {
+					errC <- err
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case err := <-errC:
+		t.Fatalf("test failed: %v", err)
+
+	case <-done:
+		// test passed
+	}
+}
 
 func TestSave(t *testing.T) {
 	ctx := context.Background()
@@ -40,9 +80,6 @@ func TestSave(t *testing.T) {
 		t.Fatalf(" expected %v\n got %v", event, res[0])
 	}
 }
-
-var event10 = nostr.Event{ID: "bbb", Kind: 0, PubKey: "key", CreatedAt: 10, Sig: "xx", Content: "{}"}
-var event100 = nostr.Event{ID: "aaa", Kind: 0, PubKey: "key", CreatedAt: 100, Sig: "xx", Content: "{}"}
 
 func TestReplace(t *testing.T) {
 	event10 := nostr.Event{ID: "bbb", Kind: 0, PubKey: "key", CreatedAt: 10}

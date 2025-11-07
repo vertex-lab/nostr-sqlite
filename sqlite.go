@@ -8,18 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nbd-wtf/go-nostr"
 )
 
 var (
-	ErrInvalidReplacement = errors.New("called Replace on a non-replaceable event")
-	ErrInternalQuery      = errors.New("internal query error")
+	ErrInvalidAddressableEvent = errors.New("addressable event doesn't have a 'd' tag")
+	ErrInvalidReplacement      = errors.New("called Replace on a non-replaceable event")
+	ErrInternalQuery           = errors.New("internal query error")
 )
 
 const schema = `
@@ -59,14 +58,23 @@ const schema = `
 	END;`
 
 // Store of Nostr events that uses an sqlite3 database.
-// It embeds the *sql.DB connection for direct interaction and manages optional validators and query builders.
-// All methods are safe for concurrent use.
+// It embeds the *sql.DB connection for direct interaction and can use
+// custom filter/event policies and query builders.
 //
-// Keep in mind however, that sqlite can only have one concurrent writer.
-// The way we handle it is retrying write operations up to [Store.retries] times on the error "database is locked".
+// All methods are safe for concurrent use. However, because of the file-based
+// architecture of SQLite, there can only be one writer at the time.
+//
+// This limitation remains even after applying recommended concurrency optimizations,
+// such as journal_mode=WAL and PRAGMA busy_timeout=1s, which are applied by default in this implementation.
+//
+// Therefore it remains possible that methods return the error [sqlite3.ErrBusy].
+// To reduce the likelyhood of this happening, you can increase the busy_timeout with
+// the option [WithBusyTimeout]. If instead you want to manually handle all [sqlite3.ErrBusy],
+// use WithBusyTimeout(0) to make blocked writers return immediatly.
+//
+// More about WAL mode and concurrency: https://sqlite.org/wal.html
 type Store struct {
 	*sql.DB
-	retries int // the maximum number of retries after a write failure "database is locked"
 
 	optimizeEvery int32        // the threshold of writes that trigger PRAGMA optimize
 	writeCount    atomic.Int32 // successful writes since last PRAGMA optimize
@@ -90,6 +98,14 @@ func New(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
 
+	if _, err := DB.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
+	}
+
+	if _, err := DB.Exec("PRAGMA busy_timeout = 1000;"); err != nil {
+		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
+	}
+
 	store := &Store{
 		DB:            DB,
 		optimizeEvery: 5000,
@@ -105,10 +121,7 @@ func New(path string, opts ...Option) (*Store, error) {
 		}
 	}
 
-	if _, err := DB.Exec("PRAGMA journal_mode = WAL;"); err != nil {
-		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
-	}
-
+	// run full optimize after options, to inform the query planner about new indexes (if any).
 	if _, err := DB.Exec("PRAGMA optimize=0x10002;"); err != nil {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
@@ -128,34 +141,6 @@ type QueryBuilder func(filters ...nostr.Filter) (queries []Query, err error)
 type Query struct {
 	SQL  string
 	Args []any
-}
-
-// IsDatabaseLocked returns true if the error indicates a locked SQLite database.
-func IsDatabaseLocked(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "database is locked")
-}
-
-// withRetries executes the given database operation with automatic retries
-// in case of a "database is locked" error. It executes [Store.retries]+1 times,
-// waiting 1ms + jitter (5ms on average) between attempts to reduce contention.
-// Returns the operation error immediately if it’s not a locking issue.
-//
-// Note: this function is only useful for writes and not reads if the journal
-// mode is set to WAL (default), as readers don't lock the database.
-func (s *Store) withRetries(op func() error) error {
-	for i := range s.retries + 1 {
-		err := op()
-		if !IsDatabaseLocked(err) {
-			return err
-		}
-
-		if i < s.retries {
-			// sleep unless it's the last try
-			jitter := time.Duration(rand.IntN(8)) * time.Millisecond
-			time.Sleep(time.Millisecond + jitter)
-		}
-	}
-	return fmt.Errorf("database is locked: performed (%d) attempts", s.retries+1)
 }
 
 // Optimize runs "PRAGMA optimize" if the writes are greater than the optimizeEvery threshold.
@@ -181,28 +166,22 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
 
 	tags, err := json.Marshal(e.Tags)
 	if err != nil {
-		return fmt.Errorf("failed to marshal the tags: %w", err)
+		return fmt.Errorf("failed to marshal the event tags: %w", err)
 	}
 
-	saved := false
-	err = s.withRetries(func() error {
-		res, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
+	res, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
         VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID, e.PubKey, e.CreatedAt, e.Kind, tags, e.Content, e.Sig)
 
-		if err != nil {
-			return err
-		}
-
-		rows, _ := res.RowsAffected()
-		saved = rows > 0
-		return nil
-	})
-
 	if err != nil {
-		return fmt.Errorf("failed to save event: %w", err)
+		return err
 	}
 
-	if saved {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check for rows affected: %w", err)
+	}
+
+	if rows > 0 {
 		s.writeCount.Add(1)
 		s.optimizeIfNeeded(ctx)
 	}
@@ -211,23 +190,17 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
 
 // Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	deleted := false
-	err := s.withRetries(func() error {
-		res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
-		if err != nil {
-			return err
-		}
-
-		rows, _ := res.RowsAffected()
-		deleted = rows > 0
-		return nil
-	})
-
+	res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
 	if err != nil {
-		return fmt.Errorf("failed to delete event: %w", err)
+		return err
 	}
 
-	if deleted {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check for rows affected: %w", err)
+	}
+
+	if rows > 0 {
 		s.writeCount.Add(1)
 		s.optimizeIfNeeded(ctx)
 	}
@@ -302,29 +275,27 @@ func (s *Store) replace(ctx context.Context, new *nostr.Event, id string) error 
 		return fmt.Errorf("failed to marshal the tags: %w", err)
 	}
 
-	return s.withRetries(func() error {
-		tx, err := s.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("failed to initiate the transaction: %w", err)
-		}
-		defer tx.Rollback()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to initiate the transaction: %w", err)
+	}
+	defer tx.Rollback()
 
-		_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`, new.ID, new.PubKey, new.CreatedAt, new.Kind, tags, new.Content, new.Sig)
 
-		if err != nil {
-			return fmt.Errorf("failed to save event with ID %s: %w", new.ID, err)
-		}
+	if err != nil {
+		return fmt.Errorf("failed to save event with ID %s: %w", new.ID, err)
+	}
 
-		if _, err = tx.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id); err != nil {
-			return fmt.Errorf("failed to delete old event with ID %s: %w", id, err)
-		}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id); err != nil {
+		return fmt.Errorf("failed to delete old event with ID %s: %w", id, err)
+	}
 
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to replace event %s with event %s: %w", id, new.ID, err)
-		}
-		return nil
-	})
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to replace event %s with event %s: %w", id, new.ID, err)
+	}
+	return nil
 }
 
 // Query stored events matching the provided filters.

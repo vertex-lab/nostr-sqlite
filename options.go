@@ -3,6 +3,7 @@ package sqlite
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -14,14 +15,15 @@ var (
 
 type Option func(*Store) error
 
-// WithRetries sets how many times to retry a locked database operation
-// after the first failed attempt. Each retry waits 1ms + jitter (~5ms on average).
-func WithRetries(n int) Option {
+// WithBusyTimeout sets the SQLite PRAGMA busy_timeout. This allows concurrent
+// operations to retry when the database is locked, up to the specified duration.
+// The duration is internally converted to milliseconds, as required by SQLite.
+func WithBusyTimeout(d time.Duration) Option {
 	return func(s *Store) error {
-		if n < 0 {
-			return errors.New("number of retries must be non-negative")
+		_, err := s.DB.Exec("PRAGMA busy_timeout = ?;", d.Milliseconds())
+		if err != nil {
+			return fmt.Errorf("failed to set busy timeout: %w", err)
 		}
-		s.retries = n
 		return nil
 	}
 }
