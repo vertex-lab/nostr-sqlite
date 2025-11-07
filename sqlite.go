@@ -239,78 +239,97 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 		return false, err
 	}
 
-	var query string
-	var args []any
-
+	var query Query
 	switch {
 	case nostr.IsReplaceableKind(event.Kind):
-		query = "SELECT id, created_at FROM events WHERE kind = $1 AND pubkey = $2"
-		args = []any{event.Kind, event.PubKey}
+		query = Query{
+			SQL:  "SELECT id, created_at FROM events WHERE kind = $1 AND pubkey = $2",
+			Args: []any{event.Kind, event.PubKey},
+		}
 
 	case nostr.IsAddressableKind(event.Kind):
-		query = "SELECT e.id, e.created_at FROM events AS e JOIN event_tags AS t ON e.id = t.event_id WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;"
-		args = []any{event.Kind, event.PubKey, event.Tags.GetD()}
+		dTag := event.Tags.GetD()
+		if dTag == "" {
+			return false, ErrInvalidAddressableEvent
+		}
+
+		query = Query{
+			SQL: `SELECT e.id, e.created_at FROM events AS e 
+				JOIN event_tags AS t ON e.id = t.event_id 
+				WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;`,
+			Args: []any{event.Kind, event.PubKey, dTag},
+		}
 
 	default:
-		return false, fmt.Errorf("%w: event ID %s, kind %d", ErrInvalidReplacement, event.ID, event.Kind)
+		return false, ErrInvalidReplacement
 	}
 
-	var oldID string
-	var oldCreatedAt nostr.Timestamp
-	row := s.DB.QueryRowContext(ctx, query, args...)
-	err := row.Scan(&oldID, &oldCreatedAt)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		if err := s.Save(ctx, event); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
+	replaced, err := s.replace(ctx, event, query)
 	if err != nil {
-		return false, fmt.Errorf("failed to query for old events to replace: %w", err)
+		return false, fmt.Errorf("failed to replace: %w", err)
 	}
-
-	if oldCreatedAt >= event.CreatedAt {
-		// event is not newer, don't replace
-		return false, nil
-	}
-
-	if err = s.replace(ctx, event, oldID); err != nil {
-		return false, err
-	}
-	return true, nil
+	return replaced, nil
 }
 
 // replace the event with the provided id with the new event.
 // It's an atomic version of Save(ctx, new) + Delete(ctx, id)
-func (s *Store) replace(ctx context.Context, new *nostr.Event, id string) error {
-	tags, err := json.Marshal(new.Tags)
+func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (bool, error) {
+	tags, err := json.Marshal(event.Tags)
 	if err != nil {
-		return fmt.Errorf("failed to marshal the tags: %w", err)
+		return false, fmt.Errorf("failed to marshal the event tags: %w", err)
 	}
 
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to initiate the transaction: %w", err)
+		return false, fmt.Errorf("failed to initiate the transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`, new.ID, new.PubKey, new.CreatedAt, new.Kind, tags, new.Content, new.Sig)
+	var oldID string
+	var oldCreatedAt nostr.Timestamp
 
-	if err != nil {
-		return fmt.Errorf("failed to save event with ID %s: %w", new.ID, err)
+	row := tx.QueryRowContext(ctx, query.SQL, query.Args...)
+	err = row.Scan(&oldID, &oldCreatedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// no old event found, insert the new one
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID, event.PubKey, event.CreatedAt, event.Kind, tags, event.Content, event.Sig)
+
+		if err != nil {
+			return false, err
+		}
+
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+
+		s.checkOptimize(ctx)
+		return true, nil
 	}
 
-	if _, err = tx.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id); err != nil {
-		return fmt.Errorf("failed to delete old event with ID %s: %w", id, err)
+	if err != nil {
+		// fail on different non nil errors
+		return false, fmt.Errorf("failed to query for old event: %w", err)
+	}
+
+	if oldCreatedAt >= event.CreatedAt {
+		return false, nil
+	}
+
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
+	VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID, event.PubKey, event.CreatedAt, event.Kind, tags, event.Content, event.Sig); err != nil {
+		return false, err
+	}
+
+	if _, err = tx.ExecContext(ctx, "DELETE FROM events WHERE id = $1", oldID); err != nil {
+		return false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to replace event %s with event %s: %w", id, new.ID, err)
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // Query stored events matching the provided filters.
