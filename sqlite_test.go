@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestConcurrency(t *testing.T) {
 		for i := range size {
 			go func(i int) {
 				defer wg.Done()
-				event := nostr.Event{Kind: i}
+				event := nostr.Event{ID: strconv.Itoa(i)}
 				err := store.Save(ctx, &event)
 				if err != nil {
 					errC <- err
@@ -44,7 +45,21 @@ func TestConcurrency(t *testing.T) {
 		t.Fatalf("test failed: %v", err)
 
 	case <-done:
-		// test passed
+		// check the size of the db
+		actual, err := store.Size(ctx)
+		if err != nil {
+			t.Fatalf("Size unexpected error: %v", err)
+		}
+
+		if actual != size {
+			t.Fatalf("expected size %d, got %v", size, actual)
+		}
+
+		// check if the optimization where performed
+		writes := store.writeCount.Load()
+		if writes > store.optimizeEvery {
+			t.Fatalf("write count %d is greater than optimizeEvery %d", writes, store.optimizeEvery)
+		}
 	}
 }
 

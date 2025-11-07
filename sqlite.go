@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 
@@ -143,17 +142,35 @@ type Query struct {
 	Args []any
 }
 
-// Optimize runs "PRAGMA optimize" if the writes are greater than the optimizeEvery threshold.
-func (s *Store) optimizeIfNeeded(ctx context.Context) {
-	if s.writeCount.Load() > s.optimizeEvery {
-		_, err := s.DB.ExecContext(ctx, "PRAGMA optimize;")
-		if err != nil && ctx.Err() == nil {
-			slog.Warn("nostr-sqlite: failed to PRAGMA optimize", "error", err)
-			return
-		}
-
-		s.writeCount.Store(0)
+// Size returns the number of events stored in the "events" table.
+func (s *Store) Size(ctx context.Context) (size int, err error) {
+	row := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM events;")
+	if err = row.Scan(&size); err != nil {
+		return -1, err
 	}
+
+	return size, nil
+}
+
+// Optimize runs "PRAGMA optimize", which updates the statistics and heuristics
+// of the query planner, which should result in improved read performance.
+// [Store.Save], [Store.Delete] call Optimize (roughly) every [Store.optimizeEvery] successful
+// insertions or deletions.
+func (s *Store) Optimize(ctx context.Context) error {
+	_, err := s.DB.ExecContext(ctx, "PRAGMA optimize;")
+	return err
+}
+
+func (s *Store) checkOptimize(ctx context.Context) error {
+	tot := s.writeCount.Add(1)
+	if tot < s.optimizeEvery {
+		return nil
+	}
+
+	if s.writeCount.CompareAndSwap(tot, 0) {
+		return s.Optimize(ctx)
+	}
+	return nil
 }
 
 // Save the event in the store. Save is idempotent, meaning successful calls to Save
@@ -182,8 +199,7 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
 	}
 
 	if rows > 0 {
-		s.writeCount.Add(1)
-		s.optimizeIfNeeded(ctx)
+		s.checkOptimize(ctx)
 	}
 	return nil
 }
@@ -201,8 +217,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 
 	if rows > 0 {
-		s.writeCount.Add(1)
-		s.optimizeIfNeeded(ctx)
+		s.checkOptimize(ctx)
 	}
 	return nil
 }
