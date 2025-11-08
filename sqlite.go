@@ -177,6 +177,11 @@ func (s *Store) checkOptimize(ctx context.Context) error {
 	return nil
 }
 
+// Close the underlying database connection, committing all temporary data to disk.
+func (s *Store) Close() error {
+	return s.DB.Close()
+}
+
 // Save the event in the store. Save is idempotent, meaning successful calls to Save
 // with the same event are no-ops.
 // For replaceable/addressable event, it is recommended to call [Store.Replace] instead.
