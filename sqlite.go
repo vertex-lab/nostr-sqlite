@@ -67,8 +67,12 @@ const schema = `
 // such as journal_mode=WAL and PRAGMA busy_timeout=1s, which are applied by default in this implementation.
 //
 // Therefore it remains possible that methods return the error [sqlite3.ErrBusy].
-// To reduce the likelyhood of this happening, you can increase the busy_timeout with
-// the option [WithBusyTimeout]. If instead you want to manually handle all [sqlite3.ErrBusy],
+// To reduce the likelyhood of this happening, you can:
+//   - increase the busy_timeout with the option [WithBusyTimeout] (default is 1s).
+//   - provide syncronization, for example with a mutex or channel(s). This however won't
+//     help if there are other programs writing to the same sqlite file.
+//
+// If instead you want to handle all [sqlite3.ErrBusy] in your application,
 // use WithBusyTimeout(0) to make blocked writers return immediatly.
 //
 // More about WAL mode and concurrency: https://sqlite.org/wal.html
@@ -154,8 +158,8 @@ func (s *Store) Size(ctx context.Context) (size int, err error) {
 
 // Optimize runs "PRAGMA optimize", which updates the statistics and heuristics
 // of the query planner, which should result in improved read performance.
-// [Store.Save], [Store.Delete] call Optimize (roughly) every [Store.optimizeEvery] successful
-// insertions or deletions.
+// The Store's write methods call Optimize (roughly) every [Store.optimizeEvery]
+// successful insertions or deletions.
 func (s *Store) Optimize(ctx context.Context) error {
 	_, err := s.DB.ExecContext(ctx, "PRAGMA optimize;")
 	return err
