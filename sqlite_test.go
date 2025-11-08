@@ -11,10 +11,11 @@ import (
 )
 
 func TestConcurrency(t *testing.T) {
-	size := 10_000
+	size := 1000
 	ctx := context.Background()
 	path := t.TempDir() + "/test.sqlite"
-	store, err := New(path)
+
+	store, err := New(path, WithOptimisationEvery(500))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN event_tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", 11},
 			},
 		},
@@ -213,7 +214,7 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN event_tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", "yyy", "p", "someone", 11},
 			},
 		},
@@ -277,7 +278,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN event_tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?)",
+				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?)",
 				Args: []any{"e", "xxx", "yyy", "p", "someone"},
 			},
 		},

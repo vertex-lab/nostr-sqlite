@@ -31,25 +31,25 @@ const schema = `
        sig TEXT NOT NULL
 	);
 
-	CREATE INDEX IF NOT EXISTS pubkey_idx ON events(pubkey);
-	CREATE INDEX IF NOT EXISTS time_idx ON events(created_at DESC);
-	CREATE INDEX IF NOT EXISTS kind_idx ON events(kind);
+	CREATE INDEX IF NOT EXISTS time_idx ON events(created_at DESC, id ASC);
+	CREATE INDEX IF NOT EXISTS kind_sorted_idx ON events(kind, created_at DESC, id ASC);
+	CREATE INDEX IF NOT EXISTS pubkey_kind_sorted_idx ON events(pubkey, kind, created_at DESC, id ASC);
 	
-	CREATE TABLE IF NOT EXISTS event_tags (
+	CREATE TABLE IF NOT EXISTS tags (
 		event_id TEXT NOT NULL,
 		key TEXT NOT NULL,
 		value TEXT NOT NULL,
 		
-		PRIMARY KEY (event_id, key, value),
+		PRIMARY KEY (key, value, event_id),
 		FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 	);
 
-	CREATE INDEX IF NOT EXISTS event_tags_key_value_idx ON event_tags(key, value);
+	CREATE INDEX IF NOT EXISTS tags_event_id_idx ON tags(event_id);
 
 	CREATE TRIGGER IF NOT EXISTS d_tags_ai AFTER INSERT ON events
 	WHEN NEW.kind BETWEEN 30000 AND 39999 
 	BEGIN
-	INSERT INTO event_tags (event_id, key, value)
+	INSERT INTO tags (event_id, key, value)
 		SELECT NEW.id, 'd', json_extract(value, '$[1]')
 		FROM json_each(NEW.tags)
 		WHERE json_type(value) = 'array' AND json_array_length(value) > 1 AND json_extract(value, '$[0]') = 'd'
@@ -259,7 +259,7 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 
 		query = Query{
 			SQL: `SELECT e.id, e.created_at FROM events AS e 
-				JOIN event_tags AS t ON e.id = t.event_id 
+				JOIN tags AS t ON e.id = t.event_id 
 				WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;`,
 			Args: []any{event.Kind, event.PubKey, dTag},
 		}
@@ -465,7 +465,7 @@ func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
 func buildQuery(filter nostr.Filter) (string, []any) {
 	sql := toSql(filter)
 	if sql.JoinTags {
-		query := "SELECT e.* FROM events AS e JOIN event_tags AS t ON t.event_id = e.id" +
+		query := "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id" +
 			" WHERE " + strings.Join(sql.Conditions, " AND ") + " GROUP BY e.id"
 		return query, sql.Args
 	}
@@ -480,7 +480,7 @@ func buildQuery(filter nostr.Filter) (string, []any) {
 func buildCount(filter nostr.Filter) (string, []any) {
 	sql := toSql(filter)
 	if sql.JoinTags {
-		query := "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN event_tags AS t ON t.event_id = e.id" +
+		query := "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id" +
 			" WHERE " + strings.Join(sql.Conditions, " AND ")
 		return query, sql.Args
 	}
