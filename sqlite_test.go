@@ -23,8 +23,8 @@ func TestConcurrency(t *testing.T) {
 	done := make(chan struct{})
 	errC := make(chan error, size)
 
+	wg.Add(size)
 	go func() {
-		wg.Add(size)
 		for i := range size {
 			go func(i int) {
 				defer wg.Done()
