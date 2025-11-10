@@ -15,6 +15,17 @@ var (
 
 type Option func(*Store) error
 
+// WithAdditionalSchema allows to specify an additional database schema, like new tables,
+// virtual tables, indexes and triggers.
+func WithAdditionalSchema(schema string) Option {
+	return func(s *Store) error {
+		if _, err := s.DB.Exec(schema); err != nil {
+			return fmt.Errorf("failed to apply additional schema: %w", err)
+		}
+		return nil
+	}
+}
+
 // WithBusyTimeout sets the SQLite PRAGMA busy_timeout. This allows concurrent
 // operations to retry when the database is locked, up to the specified duration.
 // The duration is internally converted to milliseconds, as required by SQLite.
@@ -69,17 +80,6 @@ func WithQueryBuilder(b QueryBuilder) Option {
 func WithCountBuilder(b QueryBuilder) Option {
 	return func(s *Store) error {
 		s.countBuilder = b
-		return nil
-	}
-}
-
-// WithAdditionalSchema allows to specify an additional database schema, like new tables,
-// virtual tables, indexes and triggers.
-func WithAdditionalSchema(schema string) Option {
-	return func(s *Store) error {
-		if _, err := s.DB.Exec(schema); err != nil {
-			return fmt.Errorf("failed to apply additional schema: %w", err)
-		}
 		return nil
 	}
 }
