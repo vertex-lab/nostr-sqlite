@@ -19,6 +19,7 @@ func TestConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 
 	wg := &sync.WaitGroup{}
 	done := make(chan struct{})
@@ -30,7 +31,7 @@ func TestConcurrency(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				event := nostr.Event{ID: strconv.Itoa(i)}
-				err := store.Save(ctx, &event)
+				_, err := store.Save(ctx, &event)
 				if err != nil {
 					errC <- err
 				}
@@ -67,10 +68,12 @@ func TestConcurrency(t *testing.T) {
 func TestSave(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/test.sqlite"
+
 	store, err := New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer store.Close()
 
 	event := nostr.Event{
 		Kind:    30000,
@@ -78,8 +81,13 @@ func TestSave(t *testing.T) {
 		Tags:    nostr.Tags{{"d", "test-tag"}},
 	}
 
-	if err := store.Save(ctx, &event); err != nil {
+	saved, err := store.Save(ctx, &event)
+	if err != nil {
 		t.Fatal(err)
+	}
+
+	if !saved {
+		t.Fatalf("expected saved true, got false")
 	}
 
 	res, err := store.Query(ctx, nostr.Filter{Tags: nostr.TagMap{"d": []string{"test-tag"}}, Limit: 1})
@@ -102,22 +110,22 @@ func TestReplace(t *testing.T) {
 	event100 := nostr.Event{ID: "aaa", Kind: 0, PubKey: "key", CreatedAt: 100}
 
 	tests := []struct {
-		name        string
-		stored      nostr.Event
-		new         nostr.Event
-		replacement bool
+		name     string
+		stored   nostr.Event
+		new      nostr.Event
+		replaced bool
 	}{
 		{
-			name:        "no replace (event is not newer)",
-			stored:      event100,
-			new:         event10,
-			replacement: false,
+			name:     "no replace (event is not newer)",
+			stored:   event100,
+			new:      event10,
+			replaced: false,
 		},
 		{
-			name:        "valid replace (event is newer)",
-			stored:      event10,
-			new:         event100,
-			replacement: true,
+			name:     "valid replace (event is newer)",
+			stored:   event10,
+			new:      event100,
+			replaced: true,
 		},
 	}
 
@@ -125,22 +133,29 @@ func TestReplace(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			path := t.TempDir() + "/test.sqlite"
+
 			store, err := New(path)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer store.Close()
 
-			if err := store.Save(ctx, &test.stored); err != nil {
-				t.Fatal(err)
-			}
-
-			stored, err := store.Replace(ctx, &test.new)
+			saved, err := store.Replace(ctx, &test.stored)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			if stored != test.replacement {
-				t.Fatalf("expected replacement %v, got %v", test.replacement, stored)
+			if !saved {
+				t.Fatalf("expected saved true, got false")
+			}
+
+			replaced, err := store.Replace(ctx, &test.new)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if replaced != test.replaced {
+				t.Fatalf("expected replaced %v, got %v", test.replaced, replaced)
 			}
 
 			res, err := store.Query(ctx, nostr.Filter{IDs: []string{test.stored.ID, test.new.ID}, Limit: 1})
@@ -152,7 +167,7 @@ func TestReplace(t *testing.T) {
 				t.Errorf("expected one event, got %d", len(res))
 			}
 
-			switch stored {
+			switch replaced {
 			case true:
 				if !reflect.DeepEqual(res[0], test.new) {
 					t.Fatalf("new was not saved correctly.\n original %v, got %v", test.new, res[0])
@@ -306,5 +321,184 @@ func TestDefaultCountBuilder(t *testing.T) {
 				t.Fatalf("expected query %v, got %v", test.query, query[0])
 			}
 		})
+	}
+}
+
+func BenchmarkSaveRegular(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	events := make([]*nostr.Event, size)
+	for i := range size {
+		events[i] = &nostr.Event{
+			ID:   strconv.Itoa(i),
+			Kind: 1,
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Save(ctx, events[i%size])
+		if err != nil {
+			b.Fatalf("Save failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkSaveAddressable(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	events := make([]*nostr.Event, size)
+	for i := range size {
+		events[i] = &nostr.Event{
+			ID:   strconv.Itoa(i),
+			Kind: 30_000,
+			Tags: nostr.Tags{{"d", strconv.Itoa(i)}},
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Save(ctx, events[i%size])
+		if err != nil {
+			b.Fatalf("Save failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkDeleteRegular(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	ids := make([]string, size)
+	for i := range size {
+		ids[i] = strconv.Itoa(i)
+		event := &nostr.Event{
+			ID:   ids[i],
+			Kind: 1,
+		}
+
+		_, err := store.Save(ctx, event)
+		if err != nil {
+			b.Fatalf("failed to setup: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Delete(ctx, ids[i%size])
+		if err != nil {
+			b.Fatalf("Delete failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkDeleteAddressable(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	ids := make([]string, size)
+	for i := range size {
+		ids[i] = strconv.Itoa(i)
+		event := &nostr.Event{
+			ID:   ids[i],
+			Kind: 30_000,
+			Tags: nostr.Tags{{"d", ids[i]}},
+		}
+
+		_, err := store.Save(ctx, event)
+		if err != nil {
+			b.Fatalf("failed to setup: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Delete(ctx, ids[i%size])
+		if err != nil {
+			b.Fatalf("Delete failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkReplaceReplaceable(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	events := make([]*nostr.Event, size)
+	for i := range size {
+		events[i] = &nostr.Event{
+			ID:        strconv.Itoa(i),
+			Kind:      0,
+			CreatedAt: nostr.Timestamp(i),
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Replace(ctx, events[i%size])
+		if err != nil {
+			b.Fatalf("Replace failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkReplaceAddressable(b *testing.B) {
+	ctx := context.Background()
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	size := 10_000
+	events := make([]*nostr.Event, size)
+	for i := range size {
+		events[i] = &nostr.Event{
+			ID:        strconv.Itoa(i),
+			Kind:      30_000,
+			CreatedAt: nostr.Timestamp(i),
+			Tags:      nostr.Tags{{"d", "test"}},
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		_, err := store.Replace(ctx, events[i%size])
+		if err != nil {
+			b.Fatalf("Replace failed: %v", err)
+		}
 	}
 }

@@ -60,16 +60,16 @@ const schema = `
 // It embeds the *sql.DB connection for direct interaction and can use
 // custom filter/event policies and query builders.
 //
-// All methods are safe for concurrent use. However, because of the file-based
+// All methods are safe for concurrent use. However, due to the file-based
 // architecture of SQLite, there can only be one writer at the time.
 //
-// This limitation remains even after applying recommended concurrency optimizations,
+// This limitation remains even after applying the recommended concurrency optimisations,
 // such as journal_mode=WAL and PRAGMA busy_timeout=1s, which are applied by default in this implementation.
 //
 // Therefore it remains possible that methods return the error [sqlite3.ErrBusy].
-// To reduce the likelyhood of this happening, you can:
+// To reduce the likelihood of this happening, you can:
 //   - increase the busy_timeout with the option [WithBusyTimeout] (default is 1s).
-//   - provide syncronization, for example with a mutex or channel(s). This however won't
+//   - provide synchronisation, for example with a mutex or channel(s). This however won't
 //     help if there are other programs writing to the same sqlite file.
 //
 // If instead you want to handle all [sqlite3.ErrBusy] in your application,
@@ -152,7 +152,6 @@ func (s *Store) Size(ctx context.Context) (size int, err error) {
 	if err = row.Scan(&size); err != nil {
 		return -1, err
 	}
-
 	return size, nil
 }
 
@@ -184,51 +183,57 @@ func (s *Store) Close() error {
 
 // Save the event in the store. Save is idempotent, meaning successful calls to Save
 // with the same event are no-ops.
-// For replaceable/addressable event, it is recommended to call [Store.Replace] instead.
-func (s *Store) Save(ctx context.Context, e *nostr.Event) error {
+//
+// Save returns true if the event has been saved, false in case of errors or if the event was already present.
+// For replaceable/addressable events, it is recommended to call [Store.Replace] instead.
+func (s *Store) Save(ctx context.Context, e *nostr.Event) (bool, error) {
 	if err := s.eventPolicy(e); err != nil {
-		return err
+		return false, err
 	}
 
 	tags, err := json.Marshal(e.Tags)
 	if err != nil {
-		return fmt.Errorf("failed to marshal the event tags: %w", err)
+		return false, fmt.Errorf("failed to marshal the event tags: %w", err)
 	}
 
 	res, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
         VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID, e.PubKey, e.CreatedAt, e.Kind, tags, e.Content, e.Sig)
 
 	if err != nil {
-		return err
+		return false, fmt.Errorf("failed to execute: %w", err)
 	}
 
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to check for rows affected: %w", err)
+		return false, fmt.Errorf("failed to check for rows affected: %w", err)
 	}
 
 	if rows > 0 {
 		s.checkOptimize(ctx)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
-func (s *Store) Delete(ctx context.Context, id string) error {
+// Delete returns true if the event was deleted, false in case of errors or if the event
+// was never present.
+func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("failed to execute: %w", err)
 	}
 
 	rows, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to check for rows affected: %w", err)
+		return false, fmt.Errorf("failed to check for rows affected: %w", err)
 	}
 
 	if rows > 0 {
 		s.checkOptimize(ctx)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // Replace an old event with the new one according to NIP-01.
@@ -290,7 +295,7 @@ func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (b
 
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("failed to initiate the transaction: %w", err)
+		return false, fmt.Errorf("failed to begin the transaction: %w", err)
 	}
 	defer tx.Rollback()
 
