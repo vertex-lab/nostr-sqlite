@@ -31,7 +31,10 @@ func WithAdditionalSchema(schema string) Option {
 // The duration is internally converted to milliseconds, as required by SQLite.
 func WithBusyTimeout(d time.Duration) Option {
 	return func(s *Store) error {
-		_, err := s.DB.Exec("PRAGMA busy_timeout = ?;", d.Milliseconds())
+		// had to use string manipulation rather than the '?' syntax because
+		// apparently doesn't work with PRAGMA modes.
+		cmd := fmt.Sprintf("PRAGMA busy_timeout = %d", d.Milliseconds())
+		_, err := s.DB.Exec(cmd)
 		if err != nil {
 			return fmt.Errorf("failed to set busy timeout: %w", err)
 		}

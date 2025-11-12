@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -15,7 +16,11 @@ func TestConcurrency(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/test.sqlite"
 
-	store, err := New(path, WithOptimisationEvery(500))
+	store, err := New(
+		path,
+		WithOptimisationEvery(500),
+		WithBusyTimeout(time.Second/2),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
