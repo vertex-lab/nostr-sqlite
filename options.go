@@ -8,11 +8,6 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-var (
-	ErrUnspecifiedLimit  = errors.New("unspecified filter's limit")
-	ErrUnsupportedSearch = errors.New("NIP-50 search is not supported")
-)
-
 type Option func(*Store) error
 
 // WithAdditionalSchema allows to specify an additional database schema, like new tables,
@@ -32,7 +27,7 @@ func WithAdditionalSchema(schema string) Option {
 func WithBusyTimeout(d time.Duration) Option {
 	return func(s *Store) error {
 		// had to use string manipulation rather than the '?' syntax because
-		// apparently doesn't work with PRAGMA modes.
+		// apparently doesn't work with PRAGMA commands.
 		cmd := fmt.Sprintf("PRAGMA busy_timeout = %d", d.Milliseconds())
 		_, err := s.DB.Exec(cmd)
 		if err != nil {
@@ -94,29 +89,51 @@ type EventPolicy func(*nostr.Event) error
 // It returns a potentially modified list and an error if the input is invalid.
 type FilterPolicy func(...nostr.Filter) (nostr.Filters, error)
 
-// DefaultEventPolicy never returns an error
-func defaultEventPolicy(event *nostr.Event) error {
+// DefaultEventPolicy returns an error if the event has too many tags, or if the
+// content is too big.
+func defaultEventPolicy(e *nostr.Event) error {
+	if len(e.Tags) > 100_000 {
+		return fmt.Errorf("event has too many tags: %d", len(e.Tags))
+	}
+	if len(e.Content) > 10_000_000 {
+		return fmt.Errorf("event too much content: %d", len(e.Content))
+	}
 	return nil
 }
 
-// DefaultFilterPolicy is a basic filter policy that enforces two rules:
-//  1. Filters with LimitZero set are ignored (i.e., removed).
-//  2. Remaining filters must have a Limit > 0, otherwise an error is returned.
+// DefaultFilterPolicy enforces 4 rules:
+//  1. Filters must be less than 200.
+//  2. Filters can't have the "search" field, as NIP-50 is not supported by default.
+//  3. Filters with LimitZero set are ignored (i.e., removed).
+//  4. Remaining filters must have a Limit > 0.
 //
-// It returns the cleaned list of filters or an error if any filter is invalid.
+// It returns the cleaned list of filters or an error.
 func defaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
-	result := make([]nostr.Filter, 0, len(filters))
-	for _, f := range filters {
-		if f.Search != "" {
-			return nil, ErrUnsupportedSearch
-		}
+	if len(filters) > 200 {
+		return nil, fmt.Errorf("filters must be less than 200: %d", len(filters))
+	}
 
+	if containSearch(filters) {
+		return nil, errors.New("NIP-50 search is not supported")
+	}
+
+	result := make(nostr.Filters, 0, len(filters))
+	for _, f := range filters {
 		if !f.LimitZero {
 			if f.Limit < 1 {
-				return nil, ErrUnspecifiedLimit
+				return nil, errors.New("unspecified filter's limit")
 			}
 			result = append(result, f)
 		}
 	}
 	return result, nil
+}
+
+func containSearch(filters nostr.Filters) bool {
+	for _, f := range filters {
+		if f.Search != "" {
+			return true
+		}
+	}
+	return false
 }
