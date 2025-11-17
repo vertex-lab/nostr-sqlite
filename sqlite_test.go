@@ -1,23 +1,34 @@
+//go:build !js
+
 package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"reflect"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/nbd-wtf/go-nostr"
 )
+
+func testOpenDB(path string) (*sql.DB, error) {
+	return sql.Open("sqlite3", path)
+}
 
 func TestConcurrency(t *testing.T) {
 	size := 1000
 	ctx := context.Background()
 	path := t.TempDir() + "/test.sqlite"
-
+	db, err := testOpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := New(
-		path,
+		db,
 		WithOptimisationEvery(500),
 		WithBusyTimeout(time.Second/2),
 	)
@@ -73,8 +84,11 @@ func TestConcurrency(t *testing.T) {
 func TestSave(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/test.sqlite"
-
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +152,11 @@ func TestReplace(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			path := t.TempDir() + "/test.sqlite"
-
-			store, err := New(path)
+			db, err := testOpenDB(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := New(db)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -332,7 +349,11 @@ func TestDefaultCountBuilder(t *testing.T) {
 func BenchmarkSaveRegular(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -359,7 +380,11 @@ func BenchmarkSaveRegular(b *testing.B) {
 func BenchmarkSaveAddressable(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -387,7 +412,11 @@ func BenchmarkSaveAddressable(b *testing.B) {
 func BenchmarkDeleteRegular(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -420,7 +449,11 @@ func BenchmarkDeleteRegular(b *testing.B) {
 func BenchmarkDeleteAddressable(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -454,7 +487,11 @@ func BenchmarkDeleteAddressable(b *testing.B) {
 func BenchmarkReplaceReplaceable(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -482,7 +519,11 @@ func BenchmarkReplaceReplaceable(b *testing.B) {
 func BenchmarkReplaceAddressable(b *testing.B) {
 	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
-	store, err := New(path)
+	db, err := testOpenDB(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	store, err := New(db)
 	if err != nil {
 		b.Fatal(err)
 	}
