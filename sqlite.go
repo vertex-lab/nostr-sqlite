@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/nbd-wtf/go-nostr"
+	// "github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 var (
@@ -159,7 +160,7 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) (bool, error) {
 	}
 
 	res, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID, e.PubKey, e.CreatedAt, e.Kind, tags, e.Content, e.Sig)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID.Hex(), e.PubKey.Hex(), e.CreatedAt, int(e.Kind.Num()), tags, e.Content, string(e.Sig[:]))
 
 	if err != nil {
 		return false, fmt.Errorf("failed to execute: %w", err)
@@ -217,13 +218,13 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 
 	var query Query
 	switch {
-	case nostr.IsReplaceableKind(event.Kind):
+	case event.Kind.IsReplaceable():
 		query = Query{
 			SQL:  "SELECT id, created_at FROM events WHERE kind = $1 AND pubkey = $2",
-			Args: []any{event.Kind, event.PubKey},
+			Args: []any{int(event.Kind.Num()), event.PubKey.Hex()},
 		}
 
-	case nostr.IsAddressableKind(event.Kind):
+	case event.Kind.IsAddressable():
 		dTag := event.Tags.GetD()
 		if dTag == "" {
 			return false, ErrInvalidAddressableEvent
@@ -233,7 +234,7 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 			SQL: `SELECT e.id, e.created_at FROM events AS e 
 				JOIN tags AS t ON e.id = t.event_id 
 				WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;`,
-			Args: []any{event.Kind, event.PubKey, dTag},
+			Args: []any{int(event.Kind.Num()), event.PubKey.Hex(), dTag},
 		}
 
 	default:
@@ -270,7 +271,7 @@ func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (b
 	if errors.Is(err, sql.ErrNoRows) {
 		// no old event found, insert the new one
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID, event.PubKey, event.CreatedAt, event.Kind, tags, event.Content, event.Sig)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID.Hex(), event.PubKey.Hex(), event.CreatedAt, int(event.Kind.Num()), tags, event.Content, string(event.Sig[:]))
 
 		if err != nil {
 			return false, err
@@ -294,7 +295,7 @@ func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (b
 	}
 
 	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO events (id, pubkey, created_at, kind, tags, content, sig)
-	VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID, event.PubKey, event.CreatedAt, event.Kind, tags, event.Content, event.Sig); err != nil {
+	VALUES ($1, $2, $3, $4, $5, $6, $7)`, event.ID.Hex(), event.PubKey.Hex(), event.CreatedAt, int(event.Kind.Num()), tags, event.Content, string(event.Sig[:])); err != nil {
 		return false, err
 	}
 
@@ -337,13 +338,36 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 		defer rows.Close()
 
 		for rows.Next() {
-			var event nostr.Event
-			err = rows.Scan(&event.ID, &event.PubKey, &event.CreatedAt, &event.Kind, &event.Tags, &event.Content, &event.Sig)
+			rawEvent := struct {
+				ID        string
+				PubKey    string
+				CreatedAt nostr.Timestamp
+				Kind      uint16
+				Tags      []byte
+				Content   string
+				Sig       string
+			}{}
+			err = rows.Scan(&rawEvent.ID, &rawEvent.PubKey, &rawEvent.CreatedAt, &rawEvent.Kind, &rawEvent.Tags, &rawEvent.Content, &rawEvent.Sig)
 			if err != nil {
 				return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
 			}
 
-			events = append(events, event)
+			tags := nostr.Tags{}
+			if err := json.Unmarshal(rawEvent.Tags, &tags); err != nil {
+				return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
+			}
+			var sig [64]byte
+			copy(sig[:], rawEvent.Sig)
+
+			events = append(events, nostr.Event{
+				ID:        nostr.MustIDFromHex(rawEvent.ID),
+				PubKey:    nostr.MustPubKeyFromHex(rawEvent.PubKey),
+				CreatedAt: rawEvent.CreatedAt,
+				Kind:      nostr.Kind(rawEvent.Kind),
+				Tags:      tags,
+				Content:   rawEvent.Content,
+				Sig:       sig,
+			})
 		}
 
 		if err := rows.Err(); err != nil {
@@ -475,30 +499,30 @@ func toSql(filter nostr.Filter) sqlFilter {
 	if len(filter.IDs) > 0 {
 		s.Conditions = append(s.Conditions, "e.id"+equalityClause(filter.IDs))
 		for _, id := range filter.IDs {
-			s.Args = append(s.Args, id)
+			s.Args = append(s.Args, id.Hex())
 		}
 	}
 
 	if len(filter.Kinds) > 0 {
 		s.Conditions = append(s.Conditions, "e.kind"+equalityClause(filter.Kinds))
 		for _, kind := range filter.Kinds {
-			s.Args = append(s.Args, kind)
+			s.Args = append(s.Args, int(kind.Num()))
 		}
 	}
 
 	if len(filter.Authors) > 0 {
 		s.Conditions = append(s.Conditions, "e.pubkey"+equalityClause(filter.Authors))
 		for _, pk := range filter.Authors {
-			s.Args = append(s.Args, pk)
+			s.Args = append(s.Args, pk.Hex())
 		}
 	}
 
-	if filter.Until != nil {
+	if filter.Until != 0 {
 		s.Conditions = append(s.Conditions, "e.created_at <= ?")
 		s.Args = append(s.Args, filter.Until.Time().Unix())
 	}
 
-	if filter.Since != nil {
+	if filter.Since != 0 {
 		s.Conditions = append(s.Conditions, "e.created_at >= ?")
 		s.Args = append(s.Args, filter.Since.Time().Unix())
 	}

@@ -5,14 +5,14 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/nbd-wtf/go-nostr"
 )
 
 func testOpenDB(path string) (*sql.DB, error) {
@@ -46,8 +46,13 @@ func TestConcurrency(t *testing.T) {
 		for i := range size {
 			go func(i int) {
 				defer wg.Done()
-				event := nostr.Event{ID: strconv.Itoa(i)}
-				_, err := store.Save(ctx, &event)
+				id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+				if err != nil {
+					errC <- err
+					return
+				}
+				event := nostr.Event{ID: id}
+				_, err = store.Save(ctx, &event)
 				if err != nil {
 					errC <- err
 				}
@@ -70,7 +75,7 @@ func TestConcurrency(t *testing.T) {
 		}
 
 		if actual != size {
-			t.Fatalf("expected size %d, got %v", size, actual)
+			t.Fatalf("expected size:\n%d\ngot\n%v", size, actual)
 		}
 
 		// check if the optimization where performed
@@ -120,13 +125,16 @@ func TestSave(t *testing.T) {
 
 	if !reflect.DeepEqual(res[0], event) {
 		t.Errorf("the event is not what it was before!")
-		t.Fatalf(" expected %v\n got %v", event, res[0])
+		t.Fatalf(" expected:\n%v\ngot\n%v", event, res[0])
 	}
 }
 
 func TestReplace(t *testing.T) {
-	event10 := nostr.Event{ID: "bbb", Kind: 0, PubKey: "key", CreatedAt: 10}
-	event100 := nostr.Event{ID: "aaa", Kind: 0, PubKey: "key", CreatedAt: 100}
+	idBbb, _ := nostr.IDFromHex("0000000000000000000000000000000000000000000000000000000000000bbb")
+	idAaa, _ := nostr.IDFromHex("0000000000000000000000000000000000000000000000000000000000000aaa")
+	key, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000001")
+	event10 := nostr.Event{ID: idBbb, Kind: 0, PubKey: key, CreatedAt: 10}
+	event100 := nostr.Event{ID: idAaa, Kind: 0, PubKey: key, CreatedAt: 100}
 
 	tests := []struct {
 		name     string
@@ -177,10 +185,9 @@ func TestReplace(t *testing.T) {
 			}
 
 			if replaced != test.replaced {
-				t.Fatalf("expected replaced %v, got %v", test.replaced, replaced)
+				t.Fatalf("expected replaced:\n%v\ngot\n%v", test.replaced, replaced)
 			}
-
-			res, err := store.Query(ctx, nostr.Filter{IDs: []string{test.stored.ID, test.new.ID}, Limit: 1})
+			res, err := store.Query(ctx, nostr.Filter{IDs: []nostr.ID{test.stored.ID, test.new.ID}, Limit: 1})
 			if err != nil {
 				t.Fatalf("failed to query: %v", err)
 			}
@@ -205,14 +212,17 @@ func TestReplace(t *testing.T) {
 }
 
 func TestDefaultQueryBuilder(t *testing.T) {
+	pkAaa, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000aaa")
+	pkBbb, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000bbb")
+	pkXxx, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000ccc")
 	tests := []struct {
 		name    string
-		filters nostr.Filters
+		filters []nostr.Filter
 		query   Query
 	}{
 		{
 			name:    "single filter, kind",
-			filters: nostr.Filters{{Kinds: []int{0, 1}, Limit: 100}},
+			filters: []nostr.Filter{{Kinds: []nostr.Kind{0, 1}, Limit: 100}},
 			query: Query{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.kind IN (?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{0, 1, 100},
@@ -220,50 +230,50 @@ func TestDefaultQueryBuilder(t *testing.T) {
 		},
 		{
 			name:    "single filter, authors",
-			filters: nostr.Filters{{Authors: []string{"aaa", "bbb", "xxx"}, Limit: 11}},
+			filters: []nostr.Filter{{Authors: []nostr.PubKey{pkAaa, pkBbb, pkXxx}, Limit: 11}},
 			query: Query{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.pubkey IN (?,?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
-				Args: []any{"aaa", "bbb", "xxx", 11},
+				Args: []any{"0000000000000000000000000000000000000000000000000000000000000aaa", "0000000000000000000000000000000000000000000000000000000000000bbb", "0000000000000000000000000000000000000000000000000000000000000ccc", 11},
 			},
 		},
 		{
 			name: "single filter, tag",
-			filters: nostr.Filters{{
+			filters: []nostr.Filter{{
 				Limit: 11,
 				Tags: nostr.TagMap{
-					"e": {"xxx"},
+					"e": {"0000000000000000000000000000000000000000000000000000000000000ccc"},
 				},
 			}},
 
 			query: Query{
 				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
-				Args: []any{"e", "xxx", 11},
+				Args: []any{"e", "0000000000000000000000000000000000000000000000000000000000000ccc", 11},
 			},
 		},
 		{
 			name: "single filter, tags",
-			filters: nostr.Filters{{
+			filters: []nostr.Filter{{
 				Limit: 11,
 				Tags: nostr.TagMap{
-					"e": {"xxx", "yyy"},
-					"p": {"someone"},
+					"e": {"0000000000000000000000000000000000000000000000000000000000000ccc", "0000000000000000000000000000000000000000000000000000000000000ddd"},
+					"p": {"0000000000000000000000000000000000000000000000000000000000000fff"},
 				},
 			}},
 
 			query: Query{
 				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
-				Args: []any{"e", "xxx", "yyy", "p", "someone", 11},
+				Args: []any{"e", "0000000000000000000000000000000000000000000000000000000000000ccc", "0000000000000000000000000000000000000000000000000000000000000ddd", "p", "0000000000000000000000000000000000000000000000000000000000000fff", 11},
 			},
 		},
 		{
 			name: "multiple filter",
-			filters: nostr.Filters{
-				{Kinds: []int{0, 1}, Limit: 69},
-				{Authors: []string{"aaa", "bbb"}, Limit: 420},
+			filters: []nostr.Filter{
+				{Kinds: []nostr.Kind{0, 1}, Limit: 69},
+				{Authors: []nostr.PubKey{pkAaa, pkBbb}, Limit: 420},
 			},
 			query: Query{
 				SQL:  "SELECT * FROM (SELECT e.* FROM events AS e WHERE e.kind IN (?,?) UNION ALL SELECT e.* FROM events AS e WHERE e.pubkey IN (?,?)) GROUP BY id ORDER BY created_at DESC, id ASC LIMIT ?",
-				Args: []any{0, 1, "aaa", "bbb", 69 + 420},
+				Args: []any{0, 1, "0000000000000000000000000000000000000000000000000000000000000aaa", "0000000000000000000000000000000000000000000000000000000000000bbb", 69 + 420},
 			},
 		},
 	}
@@ -276,21 +286,24 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(query[0], test.query) {
-				t.Fatalf("expected query %v, got %v", test.query, query[0])
+				t.Fatalf("expected query:\n%v\ngot\n%v", test.query, query[0])
 			}
 		})
 	}
 }
 
 func TestDefaultCountBuilder(t *testing.T) {
+	pkAaa, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000aaa")
+	pkBbb, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000bbb")
+	pkXxx, _ := nostr.PubKeyFromHex("0000000000000000000000000000000000000000000000000000000000000ccc")
 	tests := []struct {
 		name    string
-		filters nostr.Filters
+		filters []nostr.Filter
 		query   Query
 	}{
 		{
 			name:    "single filter, kind",
-			filters: nostr.Filters{{Kinds: []int{0}}},
+			filters: []nostr.Filter{{Kinds: []nostr.Kind{0}}},
 			query: Query{
 				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.kind = ?",
 				Args: []any{0},
@@ -298,36 +311,36 @@ func TestDefaultCountBuilder(t *testing.T) {
 		},
 		{
 			name:    "single filter, authors",
-			filters: nostr.Filters{{Authors: []string{"aaa", "bbb", "xxx"}}},
+			filters: []nostr.Filter{{Authors: []nostr.PubKey{pkAaa, pkBbb, pkXxx}}},
 			query: Query{
 				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.pubkey IN (?,?,?)",
-				Args: []any{"aaa", "bbb", "xxx"},
+				Args: []any{"0000000000000000000000000000000000000000000000000000000000000aaa", "0000000000000000000000000000000000000000000000000000000000000bbb", "0000000000000000000000000000000000000000000000000000000000000ccc"},
 			},
 		},
 		{
 			name: "single filter, tags",
-			filters: nostr.Filters{{
+			filters: []nostr.Filter{{
 				Limit: 11,
 				Tags: nostr.TagMap{
-					"e": {"xxx", "yyy"},
-					"p": {"someone"},
+					"e": {"0000000000000000000000000000000000000000000000000000000000000ccc", "0000000000000000000000000000000000000000000000000000000000000ddd"},
+					"p": {"0000000000000000000000000000000000000000000000000000000000000fff"},
 				},
 			}},
 
 			query: Query{
 				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?)",
-				Args: []any{"e", "xxx", "yyy", "p", "someone"},
+				Args: []any{"e", "0000000000000000000000000000000000000000000000000000000000000ccc", "0000000000000000000000000000000000000000000000000000000000000ddd", "p", "0000000000000000000000000000000000000000000000000000000000000fff"},
 			},
 		},
 		{
 			name: "multiple filter",
-			filters: nostr.Filters{
-				{Kinds: []int{0, 1}},
-				{Authors: []string{"aaa", "bbb"}},
+			filters: []nostr.Filter{
+				{Kinds: []nostr.Kind{0, 1}},
+				{Authors: []nostr.PubKey{pkAaa, pkBbb}},
 			},
 			query: Query{
 				SQL:  "SELECT ((SELECT COUNT(e.id) FROM events AS e WHERE e.kind IN (?,?)) + (SELECT COUNT(e.id) FROM events AS e WHERE e.pubkey IN (?,?)))",
-				Args: []any{0, 1, "aaa", "bbb"},
+				Args: []any{0, 1, "0000000000000000000000000000000000000000000000000000000000000aaa", "0000000000000000000000000000000000000000000000000000000000000bbb"},
 			},
 		},
 	}
@@ -340,7 +353,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(query[0], test.query) {
-				t.Fatalf("expected query %v, got %v", test.query, query[0])
+				t.Fatalf("expected query:\n%v\ngot\n%v", test.query, query[0])
 			}
 		})
 	}
@@ -362,8 +375,12 @@ func BenchmarkSaveRegular(b *testing.B) {
 	size := 10_000
 	events := make([]*nostr.Event, size)
 	for i := range size {
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
 		events[i] = &nostr.Event{
-			ID:   strconv.Itoa(i),
+			ID:   id,
 			Kind: 1,
 		}
 	}
@@ -393,10 +410,14 @@ func BenchmarkSaveAddressable(b *testing.B) {
 	size := 10_000
 	events := make([]*nostr.Event, size)
 	for i := range size {
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
 		events[i] = &nostr.Event{
-			ID:   strconv.Itoa(i),
+			ID:   id,
 			Kind: 30_000,
-			Tags: nostr.Tags{{"d", strconv.Itoa(i)}},
+			Tags: nostr.Tags{{"d", id.Hex()}},
 		}
 	}
 
@@ -423,15 +444,19 @@ func BenchmarkDeleteRegular(b *testing.B) {
 	defer store.Close()
 
 	size := 10_000
-	ids := make([]string, size)
+	ids := make([]nostr.ID, size)
 	for i := range size {
-		ids[i] = strconv.Itoa(i)
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		ids[i] = id
 		event := &nostr.Event{
 			ID:   ids[i],
 			Kind: 1,
 		}
 
-		_, err := store.Save(ctx, event)
+		_, err = store.Save(ctx, event)
 		if err != nil {
 			b.Fatalf("failed to setup: %v", err)
 		}
@@ -439,7 +464,7 @@ func BenchmarkDeleteRegular(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Delete(ctx, ids[i%size])
+		_, err := store.Delete(ctx, ids[i%size].Hex())
 		if err != nil {
 			b.Fatalf("Delete failed: %v", err)
 		}
@@ -460,16 +485,20 @@ func BenchmarkDeleteAddressable(b *testing.B) {
 	defer store.Close()
 
 	size := 10_000
-	ids := make([]string, size)
+	ids := make([]nostr.ID, size)
 	for i := range size {
-		ids[i] = strconv.Itoa(i)
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		ids[i] = id
 		event := &nostr.Event{
 			ID:   ids[i],
 			Kind: 30_000,
-			Tags: nostr.Tags{{"d", ids[i]}},
+			Tags: nostr.Tags{{"d", ids[i].Hex()}},
 		}
 
-		_, err := store.Save(ctx, event)
+		_, err = store.Save(ctx, event)
 		if err != nil {
 			b.Fatalf("failed to setup: %v", err)
 		}
@@ -477,7 +506,7 @@ func BenchmarkDeleteAddressable(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Delete(ctx, ids[i%size])
+		_, err := store.Delete(ctx, ids[i%size].Hex())
 		if err != nil {
 			b.Fatalf("Delete failed: %v", err)
 		}
@@ -500,8 +529,12 @@ func BenchmarkReplaceReplaceable(b *testing.B) {
 	size := 10_000
 	events := make([]*nostr.Event, size)
 	for i := range size {
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
 		events[i] = &nostr.Event{
-			ID:        strconv.Itoa(i),
+			ID:        id,
 			Kind:      0,
 			CreatedAt: nostr.Timestamp(i),
 		}
@@ -532,8 +565,12 @@ func BenchmarkReplaceAddressable(b *testing.B) {
 	size := 10_000
 	events := make([]*nostr.Event, size)
 	for i := range size {
+		id, err := nostr.IDFromHex(fmt.Sprintf("%064d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
 		events[i] = &nostr.Event{
-			ID:        strconv.Itoa(i),
+			ID:        id,
 			Kind:      30_000,
 			CreatedAt: nostr.Timestamp(i),
 			Tags:      nostr.Tags{{"d", "test"}},
