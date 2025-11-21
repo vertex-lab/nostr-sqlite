@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	// "github.com/nbd-wtf/go-nostr"
 	"fiatjaf.com/nostr"
 )
 
