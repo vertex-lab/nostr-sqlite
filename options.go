@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nbd-wtf/go-nostr"
+	"fiatjaf.com/nostr"
 )
 
 type Option func(*Store) error
@@ -87,7 +87,7 @@ type EventPolicy func(*nostr.Event) error
 
 // FilterPolicy sanitizes a list of filters before building a query.
 // It returns a potentially modified list and an error if the input is invalid.
-type FilterPolicy func(...nostr.Filter) (nostr.Filters, error)
+type FilterPolicy func(...nostr.Filter) ([]nostr.Filter, error)
 
 // DefaultEventPolicy returns an error if the event has too many tags, or if the
 // content is too big.
@@ -108,7 +108,7 @@ func defaultEventPolicy(e *nostr.Event) error {
 //  4. Remaining filters must have a Limit > 0.
 //
 // It returns the cleaned list of filters or an error.
-func defaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
+func defaultFilterPolicy(filters ...nostr.Filter) ([]nostr.Filter, error) {
 	if len(filters) > 200 {
 		return nil, fmt.Errorf("filters must be less than 200: %d", len(filters))
 	}
@@ -117,7 +117,7 @@ func defaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
 		return nil, errors.New("NIP-50 search is not supported")
 	}
 
-	result := make(nostr.Filters, 0, len(filters))
+	result := make([]nostr.Filter, 0, len(filters))
 	for _, f := range filters {
 		if !f.LimitZero {
 			if f.Limit < 1 {
@@ -129,7 +129,7 @@ func defaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
 	return result, nil
 }
 
-func containSearch(filters nostr.Filters) bool {
+func containSearch(filters []nostr.Filter) bool {
 	for _, f := range filters {
 		if f.Search != "" {
 			return true
