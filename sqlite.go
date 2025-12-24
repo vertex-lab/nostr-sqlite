@@ -60,25 +60,29 @@ type Store struct {
 // New returns an sqlite3 store connected to the sqlite file located at the provided
 // file path, after applying the base schema, and the provided options.
 func New(path string, opts ...Option) (*Store, error) {
-	DB, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
 	}
 
-	if _, err := DB.Exec(schema); err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
 
-	if _, err := DB.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
 	}
 
-	if _, err := DB.Exec("PRAGMA busy_timeout = 1000;"); err != nil {
+	if _, err := db.Exec("PRAGMA busy_timeout = 1000;"); err != nil {
 		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
+	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		return nil, fmt.Errorf("failed to activate foreign keys: %w", err)
+	}
+
 	store := &Store{
-		DB:            DB,
+		DB:            db,
 		optimizeEvery: 5000,
 		filterPolicy:  defaultFilterPolicy,
 		eventPolicy:   defaultEventPolicy,
@@ -93,7 +97,7 @@ func New(path string, opts ...Option) (*Store, error) {
 	}
 
 	// run full optimize after options, to inform the query planner about new indexes (if any).
-	if _, err := DB.Exec("PRAGMA optimize=0x10002;"); err != nil {
+	if _, err := db.Exec("PRAGMA optimize=0x10002;"); err != nil {
 		return nil, fmt.Errorf("failed to PRAGMA optimize: %w", err)
 	}
 	return store, nil
