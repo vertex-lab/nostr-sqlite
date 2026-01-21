@@ -2,8 +2,6 @@ module github.com/vertex-lab/nostr-sqlite
 
 go 1.24.1
 
-toolchain go1.24.10
-
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/nbd-wtf/go-nostr v0.52.0
