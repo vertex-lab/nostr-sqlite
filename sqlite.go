@@ -84,8 +84,8 @@ func New(path string, opts ...Option) (*Store, error) {
 	store := &Store{
 		DB:            db,
 		optimizeEvery: 5000,
-		filterPolicy:  defaultFilterPolicy,
-		eventPolicy:   defaultEventPolicy,
+		filterPolicy:  DefaultFilterPolicy,
+		eventPolicy:   DefaultEventPolicy,
 		queryBuilder:  DefaultQueryBuilder,
 		countBuilder:  DefaultCountBuilder,
 	}

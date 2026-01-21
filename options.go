@@ -48,6 +48,23 @@ func WithOptimisationEvery(n int) Option {
 	}
 }
 
+// WithEventPolicy sets a custom [nastro.EventPolicy] on the Store.
+// It will be used to validate events before inserting them into the database.
+func WithEventPolicy(p EventPolicy) Option {
+	return func(s *Store) error {
+		s.eventPolicy = p
+		return nil
+	}
+}
+
+// WithoutEventPolicy removes any event policy from the store.
+func WithoutEventPolicy() Option {
+	return func(s *Store) error {
+		s.eventPolicy = NoEventPolicy
+		return nil
+	}
+}
+
 // WithFilterPolicy sets a custom [nastro.FilterPolicy] on the Store.
 // It will be used to validate and modify filters before executing queries.
 func WithFilterPolicy(p FilterPolicy) Option {
@@ -57,11 +74,10 @@ func WithFilterPolicy(p FilterPolicy) Option {
 	}
 }
 
-// WithEventPolicy sets a custom [nastro.EventPolicy] on the Store.
-// It will be used to validate events before inserting them into the database.
-func WithEventPolicy(p EventPolicy) Option {
+// WithoutFilterPolicy removes any filter policy from the store.
+func WithoutFilterPolicy() Option {
 	return func(s *Store) error {
-		s.eventPolicy = p
+		s.filterPolicy = NoFilterPolicy
 		return nil
 	}
 }
@@ -85,13 +101,11 @@ func WithCountBuilder(b QueryBuilder) Option {
 // EventPolicy validates a nostr event before it's written to the store.
 type EventPolicy func(*nostr.Event) error
 
-// FilterPolicy sanitizes a list of filters before building a query.
-// It returns a potentially modified list and an error if the input is invalid.
-type FilterPolicy func(...nostr.Filter) (nostr.Filters, error)
+var NoEventPolicy EventPolicy = func(e *nostr.Event) error { return nil } // no-op event policy
 
 // DefaultEventPolicy returns an error if the event has too many tags, or if the
 // content is too big.
-func defaultEventPolicy(e *nostr.Event) error {
+func DefaultEventPolicy(e *nostr.Event) error {
 	if len(e.Tags) > 100_000 {
 		return fmt.Errorf("event has too many tags: %d", len(e.Tags))
 	}
@@ -101,6 +115,12 @@ func defaultEventPolicy(e *nostr.Event) error {
 	return nil
 }
 
+// FilterPolicy sanitizes a list of filters before building a query.
+// It returns a potentially modified list and an error if the input is invalid.
+type FilterPolicy func(...nostr.Filter) (nostr.Filters, error)
+
+var NoFilterPolicy FilterPolicy = func(filters ...nostr.Filter) (nostr.Filters, error) { return filters, nil } // no-op filter policy
+
 // DefaultFilterPolicy enforces 4 rules:
 //  1. Filters must be less than 200.
 //  2. Filters can't have the "search" field, as NIP-50 is not supported by default.
@@ -108,7 +128,7 @@ func defaultEventPolicy(e *nostr.Event) error {
 //  4. Remaining filters must have a Limit > 0.
 //
 // It returns the cleaned list of filters or an error.
-func defaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
+func DefaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
 	if len(filters) > 200 {
 		return nil, fmt.Errorf("filters must be less than 200: %d", len(filters))
 	}
