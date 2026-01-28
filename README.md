@@ -1,6 +1,10 @@
 # Nostr Sqlite
 Nostr-sqlite is a Go library providing a performant and highly customizable sqlite3 store for Nostr events.
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/vertex-lab/nostr-sqlite)](https://goreportcard.com/report/github.com/vertex-lab/nostr-sqlite)
+[![Go Reference](https://pkg.go.dev/badge/github.com/vertex-lab/nostr-sqlite.svg)](https://pkg.go.dev/github.com/vertex-lab/nostr-sqlite)
+
+
 ## Installation
 
 ```
