@@ -115,6 +115,6 @@ To reduce the likelihood of this happening, you can:
 - provide synchronisation, for example with a mutex or channel(s). This however won't help if there are other programs writing to the same sqlite file.
 
 If instead you want to handle all `sqlite3.ErrBusy` in your application,
-use `WithBusyTimeout(0)` to make blocked writers return immediatly.
+use `WithBusyTimeout(0)` to make blocked writers return immediately.
 
 You can learn more about WAL mode and concurrency in the [official documentation](https://sqlite.org/wal.html).

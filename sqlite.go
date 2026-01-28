@@ -41,7 +41,7 @@ var schema string
 //     help if there are other programs writing to the same sqlite file.
 //
 // If instead you want to handle all [sqlite3.ErrBusy] in your application,
-// use WithBusyTimeout(0) to make blocked writers return immediatly.
+// use WithBusyTimeout(0) to make blocked writers return immediately.
 //
 // More about WAL mode and concurrency: https://sqlite.org/wal.html
 type Store struct {
