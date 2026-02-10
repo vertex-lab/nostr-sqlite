@@ -483,21 +483,21 @@ type sqlFilter struct {
 func toSql(filter nostr.Filter) sqlFilter {
 	s := sqlFilter{}
 	if len(filter.IDs) > 0 {
-		s.Conditions = append(s.Conditions, "e.id"+equalityClause(filter.IDs))
+		s.Conditions = append(s.Conditions, "e.id "+in(filter.IDs))
 		for _, id := range filter.IDs {
 			s.Args = append(s.Args, id)
 		}
 	}
 
 	if len(filter.Kinds) > 0 {
-		s.Conditions = append(s.Conditions, "e.kind"+equalityClause(filter.Kinds))
+		s.Conditions = append(s.Conditions, "e.kind "+in(filter.Kinds))
 		for _, kind := range filter.Kinds {
 			s.Args = append(s.Args, kind)
 		}
 	}
 
 	if len(filter.Authors) > 0 {
-		s.Conditions = append(s.Conditions, "e.pubkey"+equalityClause(filter.Authors))
+		s.Conditions = append(s.Conditions, "e.pubkey "+in(filter.Authors))
 		for _, pk := range filter.Authors {
 			s.Args = append(s.Args, pk)
 		}
@@ -522,7 +522,7 @@ func toSql(filter nostr.Filter) sqlFilter {
 				continue
 			}
 
-			conds = append(conds, "(t.key = ? AND t.value"+equalityClause(vals)+")")
+			conds = append(conds, "(t.key = ? AND t.value "+in(vals)+")")
 			args = append(args, key)
 			for _, v := range vals {
 				args = append(args, v)
@@ -543,14 +543,14 @@ func toSql(filter nostr.Filter) sqlFilter {
 	return s
 }
 
-// equalityClause returns the appropriate SQL comparison operator and placeholder(s)
+// in returns the appropriate SQL comparison operator and placeholder(s)
 // for use in a WHERE clause, based on the number of values provided.
 // If the slice contains one value, it returns " = ?".
 // If it contains multiple values, it returns " IN (?, ?, ... )" with the correct number of placeholders.
 // It panics is vals is nil or empty.
-func equalityClause[T any](vals []T) string {
+func in[T any](vals []T) string {
 	if len(vals) == 1 {
-		return " = ?"
+		return "= ?"
 	}
-	return " IN (?" + strings.Repeat(",?", len(vals)-1) + ")"
+	return "IN (?" + strings.Repeat(",?", len(vals)-1) + ")"
 }
