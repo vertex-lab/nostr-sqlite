@@ -212,7 +212,7 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value = ?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", 11},
 			},
 		},
@@ -227,7 +227,7 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob", 11},
 			},
 		},
@@ -243,7 +243,7 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE e.kind IN (?,?) AND ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e WHERE e.kind IN (?,?) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{0, 1, "e", "xxx", "yyy", "p", "alice", "bob", 11},
 			},
 		},
@@ -316,7 +316,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?)))",
+				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?))",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob"},
 			},
 		},

@@ -16,9 +16,9 @@ import (
 )
 
 var (
-	ErrInvalidAddressableEvent = errors.New("addressable event doesn't have a 'd' tag")
-	ErrInvalidReplacement      = errors.New("called Replace on a non-replaceable event")
-	ErrInternalQuery           = errors.New("internal query error")
+	ErrInvalidAddressable = errors.New("addressable event must have exactly one (non empty) 'd' tag")
+	ErrInvalidReplacement = errors.New("called Replace on a non-replaceable event")
+	ErrInternalQuery      = errors.New("internal query error")
 )
 
 //go:embed schema.sql
@@ -225,41 +225,60 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 		return false, err
 	}
 
-	var query Query
+	var query string
+	var args []any
+
 	switch {
 	case nostr.IsReplaceableKind(event.Kind):
-		query = Query{
-			SQL:  "SELECT id, created_at FROM events WHERE kind = $1 AND pubkey = $2",
-			Args: []any{event.Kind, event.PubKey},
-		}
+		query = "SELECT id, created_at FROM events WHERE kind = $1 AND pubkey = $2"
+		args = []any{event.Kind, event.PubKey}
 
 	case nostr.IsAddressableKind(event.Kind):
-		dTag := event.Tags.GetD()
-		if dTag == "" {
-			return false, ErrInvalidAddressableEvent
+		dTags := findAll(event.Tags, "d")
+		if len(dTags) != 1 {
+			return false, ErrInvalidAddressable
 		}
 
-		query = Query{
-			SQL: `SELECT e.id, e.created_at FROM events AS e
-				JOIN tags AS t ON e.id = t.event_id
-				WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;`,
-			Args: []any{event.Kind, event.PubKey, dTag},
+		d := dTags[0]
+		if d == "" {
+			return false, ErrInvalidAddressable
 		}
+
+		query = `SELECT e.id, e.created_at FROM events AS e
+				JOIN tags AS t ON e.id = t.event_id
+				WHERE e.kind = ? AND e.pubkey = ? AND t.key = 'd' AND t.value = ?`
+		args = []any{event.Kind, event.PubKey, d}
 
 	default:
 		return false, ErrInvalidReplacement
 	}
 
-	replaced, err := s.replace(ctx, event, query)
+	replaced, err := s.replace(ctx, event, query, args)
 	if err != nil {
 		return false, fmt.Errorf("failed to replace: %w", err)
 	}
 	return replaced, nil
 }
 
+// findAll returns all values of the given key in the tags.
+func findAll(tags nostr.Tags, key string) []string {
+	var values []string
+	for _, t := range tags {
+		if len(t) >= 2 && t[0] == key {
+			values = append(values, t[1])
+		}
+	}
+	return values
+}
+
 // replace the event with the provided id with the new event.
 // It's an atomic version of Save(ctx, new) + Delete(ctx, id)
-func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (bool, error) {
+func (s *Store) replace(
+	ctx context.Context,
+	event *nostr.Event,
+	query string,
+	args []any) (bool, error) {
+
 	tags, err := json.Marshal(event.Tags)
 	if err != nil {
 		return false, fmt.Errorf("failed to marshal the event tags: %w", err)
@@ -274,7 +293,7 @@ func (s *Store) replace(ctx context.Context, event *nostr.Event, query Query) (b
 	var oldID string
 	var oldCreatedAt nostr.Timestamp
 
-	row := tx.QueryRowContext(ctx, query.SQL, query.Args...)
+	row := tx.QueryRowContext(ctx, query, args...)
 	err = row.Scan(&oldID, &oldCreatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -445,109 +464,79 @@ func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
 }
 
 func buildQuery(filter nostr.Filter) (string, []any) {
-	sql := toSql(filter)
-	if sql.JoinTags {
-		query := "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id" +
-			" WHERE " + strings.Join(sql.Conditions, " AND ") + " GROUP BY e.id"
-		return query, sql.Args
-	}
-
+	conds, args := toSql(filter)
 	query := "SELECT e.* FROM events AS e"
-	if len(sql.Conditions) > 0 {
-		query += " WHERE " + strings.Join(sql.Conditions, " AND ")
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
 	}
-	return query, sql.Args
+	return query, args
 }
 
 func buildCount(filter nostr.Filter) (string, []any) {
-	sql := toSql(filter)
-	if sql.JoinTags {
-		query := "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id" +
-			" WHERE " + strings.Join(sql.Conditions, " AND ")
-		return query, sql.Args
-	}
-
+	conds, args := toSql(filter)
 	query := "SELECT COUNT(e.id) FROM events AS e"
-	if len(sql.Conditions) > 0 {
-		query += " WHERE " + strings.Join(sql.Conditions, " AND ")
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
 	}
-	return query, sql.Args
+	return query, args
 }
 
-type sqlFilter struct {
-	Conditions []string
-	Args       []any
-	JoinTags   bool
-}
-
-func toSql(filter nostr.Filter) sqlFilter {
-	s := sqlFilter{}
+// toSql converts a nostr.Filter to a SQL condition string and arguments.
+func toSql(filter nostr.Filter) (conds []string, args []any) {
 	if len(filter.IDs) > 0 {
-		s.Conditions = append(s.Conditions, "e.id "+in(filter.IDs))
+		conds = append(conds, "e.id "+in(filter.IDs))
 		for _, id := range filter.IDs {
-			s.Args = append(s.Args, id)
+			args = append(args, id)
 		}
 	}
 
 	if len(filter.Kinds) > 0 {
-		s.Conditions = append(s.Conditions, "e.kind "+in(filter.Kinds))
+		conds = append(conds, "e.kind "+in(filter.Kinds))
 		for _, kind := range filter.Kinds {
-			s.Args = append(s.Args, kind)
+			args = append(args, kind)
 		}
 	}
 
 	if len(filter.Authors) > 0 {
-		s.Conditions = append(s.Conditions, "e.pubkey "+in(filter.Authors))
+		conds = append(conds, "e.pubkey "+in(filter.Authors))
 		for _, pk := range filter.Authors {
-			s.Args = append(s.Args, pk)
+			args = append(args, pk)
 		}
 	}
 
 	if filter.Until != nil {
-		s.Conditions = append(s.Conditions, "e.created_at <= ?")
-		s.Args = append(s.Args, filter.Until.Time().Unix())
+		conds = append(conds, "e.created_at <= ?")
+		args = append(args, filter.Until.Time().Unix())
 	}
 
 	if filter.Since != nil {
-		s.Conditions = append(s.Conditions, "e.created_at >= ?")
-		s.Args = append(s.Args, filter.Since.Time().Unix())
+		conds = append(conds, "e.created_at >= ?")
+		args = append(args, filter.Since.Time().Unix())
 	}
 
 	if len(filter.Tags) > 0 {
-		conds := make([]string, 0, len(filter.Tags))
-		args := make([]any, 0, len(filter.Tags))
-
+		// Each tag key must match (AND logic between different keys)
+		// Within a tag key, any value can match (OR logic via IN clause)
 		for key, vals := range filter.Tags {
 			if len(vals) == 0 || key == "" {
 				continue
 			}
 
-			conds = append(conds, "(t.key = ? AND t.value "+in(vals)+")")
+			conds = append(conds, "e.id IN (SELECT event_id FROM tags WHERE key = ? AND value "+in(vals)+")")
 			args = append(args, key)
 			for _, v := range vals {
 				args = append(args, v)
 			}
 		}
-
-		if len(conds) > 0 {
-			s.JoinTags = true
-			tagCondition := strings.Join(conds, " OR ")
-			if len(conds) > 1 {
-				// Only wrap in parentheses if there are multiple conditions (contains OR)
-				tagCondition = "(" + tagCondition + ")"
-			}
-			s.Conditions = append(s.Conditions, tagCondition)
-			s.Args = append(s.Args, args...)
-		}
 	}
-	return s
+	return conds, args
 }
 
 // in returns the appropriate SQL comparison operator and placeholder(s)
 // for use in a WHERE clause, based on the number of values provided.
 // If the slice contains one value, it returns " = ?".
 // If it contains multiple values, it returns " IN (?, ?, ... )" with the correct number of placeholders.
-// It panics is vals is nil or empty.
+// It panics if vals is nil or empty.
 func in[T any](vals []T) string {
 	if len(vals) == 1 {
 		return "= ?"
