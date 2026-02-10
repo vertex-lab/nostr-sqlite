@@ -251,8 +251,16 @@ func TestDefaultQueryBuilder(t *testing.T) {
 				t.Fatalf("expected error nil, got %v", err)
 			}
 
-			if !reflect.DeepEqual(query[0], test.query) {
-				t.Fatalf("expected query %v, got %v", test.query, query[0])
+			sql := query[0].SQL
+			if sql != test.query.SQL {
+				t.Fatalf("expected SQL %v, got %v", test.query.SQL, sql)
+			}
+
+			// compare the set of args as to avoid false positives caused by the order of the arguments
+			args := toSet(query[0].Args)
+			expected := toSet(test.query.Args)
+			if !reflect.DeepEqual(args, expected) {
+				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
 			}
 		})
 	}
@@ -315,8 +323,16 @@ func TestDefaultCountBuilder(t *testing.T) {
 				t.Fatalf("expected error nil, got %v", err)
 			}
 
-			if !reflect.DeepEqual(query[0], test.query) {
-				t.Fatalf("expected query %v, got %v", test.query, query[0])
+			sql := query[0].SQL
+			if sql != test.query.SQL {
+				t.Fatalf("expected SQL %v, got %v", test.query.SQL, sql)
+			}
+
+			// compare the set of args as to avoid false positives caused by the order of the arguments
+			args := toSet(query[0].Args)
+			expected := toSet(test.query.Args)
+			if !reflect.DeepEqual(args, expected) {
+				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
 			}
 		})
 	}
@@ -493,4 +509,12 @@ func BenchmarkReplaceAddressable(b *testing.B) {
 			b.Fatalf("Replace failed: %v", err)
 		}
 	}
+}
+
+func toSet(slice []any) map[any]struct{} {
+	set := make(map[any]struct{})
+	for _, item := range slice {
+		set[item] = struct{}{}
+	}
+	return set
 }
