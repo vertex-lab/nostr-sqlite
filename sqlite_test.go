@@ -229,13 +229,13 @@ func TestDefaultQueryBuilder(t *testing.T) {
 				Limit: 11,
 				Tags: nostr.TagMap{
 					"e": {"xxx", "yyy"},
-					"p": {"someone"},
+					"p": {"alice", "bob"},
 				},
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
-				Args: []any{"e", "xxx", "yyy", "p", "someone", 11},
+				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?)) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob", 11},
 			},
 		},
 		{
