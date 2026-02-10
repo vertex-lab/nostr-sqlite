@@ -11,13 +11,12 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
+var ctx = context.Background()
+
 func TestConcurrency(t *testing.T) {
 	size := 1000
-	ctx := context.Background()
-	path := t.TempDir() + "/test.sqlite"
-
 	store, err := New(
-		path,
+		"file::memory:?cache=shared",
 		WithOptimisationEvery(500),
 		WithBusyTimeout(time.Second/2),
 	)
@@ -71,10 +70,7 @@ func TestConcurrency(t *testing.T) {
 }
 
 func TestSave(t *testing.T) {
-	ctx := context.Background()
-	path := t.TempDir() + "/test.sqlite"
-
-	store, err := New(path)
+	store, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +132,7 @@ func TestReplace(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
-			path := t.TempDir() + "/test.sqlite"
-
-			store, err := New(path)
+			store, err := New(":memory:")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,13 +286,13 @@ func TestDefaultCountBuilder(t *testing.T) {
 				Limit: 11,
 				Tags: nostr.TagMap{
 					"e": {"xxx", "yyy"},
-					"p": {"someone"},
+					"p": {"alice", "bob"},
 				},
 			}},
 
 			query: Query{
-				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value = ?)",
-				Args: []any{"e", "xxx", "yyy", "p", "someone"},
+				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))",
+				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob"},
 			},
 		},
 		{
@@ -330,7 +323,6 @@ func TestDefaultCountBuilder(t *testing.T) {
 }
 
 func BenchmarkSaveRegular(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -357,7 +349,6 @@ func BenchmarkSaveRegular(b *testing.B) {
 }
 
 func BenchmarkSaveAddressable(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -385,7 +376,6 @@ func BenchmarkSaveAddressable(b *testing.B) {
 }
 
 func BenchmarkDeleteRegular(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -418,7 +408,6 @@ func BenchmarkDeleteRegular(b *testing.B) {
 }
 
 func BenchmarkDeleteAddressable(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -452,7 +441,6 @@ func BenchmarkDeleteAddressable(b *testing.B) {
 }
 
 func BenchmarkReplaceReplaceable(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -480,7 +468,6 @@ func BenchmarkReplaceReplaceable(b *testing.B) {
 }
 
 func BenchmarkReplaceAddressable(b *testing.B) {
-	ctx := context.Background()
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
