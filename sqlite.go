@@ -240,8 +240,8 @@ func (s *Store) Replace(ctx context.Context, event *nostr.Event) (bool, error) {
 		}
 
 		query = Query{
-			SQL: `SELECT e.id, e.created_at FROM events AS e 
-				JOIN tags AS t ON e.id = t.event_id 
+			SQL: `SELECT e.id, e.created_at FROM events AS e
+				JOIN tags AS t ON e.id = t.event_id
 				WHERE e.kind = $1 AND e.pubkey = $2 AND t.key = 'd' AND t.value = $3;`,
 			Args: []any{event.Kind, event.PubKey, dTag},
 		}
@@ -518,7 +518,7 @@ func toSql(filter nostr.Filter) sqlFilter {
 		args := make([]any, 0, len(filter.Tags))
 
 		for key, vals := range filter.Tags {
-			if len(vals) == 0 {
+			if len(vals) == 0 || key == "" {
 				continue
 			}
 
@@ -531,7 +531,12 @@ func toSql(filter nostr.Filter) sqlFilter {
 
 		if len(conds) > 0 {
 			s.JoinTags = true
-			s.Conditions = append(s.Conditions, strings.Join(conds, " OR "))
+			tagCondition := strings.Join(conds, " OR ")
+			if len(conds) > 1 {
+				// Only wrap in parentheses if there are multiple conditions (contains OR)
+				tagCondition = "(" + tagCondition + ")"
+			}
+			s.Conditions = append(s.Conditions, tagCondition)
 			s.Args = append(s.Args, args...)
 		}
 	}

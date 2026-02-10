@@ -227,8 +227,24 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?)) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob", 11},
+			},
+		},
+		{
+			name: "single filter, kinds and tags",
+			filters: nostr.Filters{{
+				Limit: 11,
+				Kinds: []int{0, 1},
+				Tags: nostr.TagMap{
+					"e": {"xxx", "yyy"},
+					"p": {"alice", "bob"},
+				},
+			}},
+
+			query: Query{
+				SQL:  "SELECT e.* FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE e.kind IN (?,?) AND ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))) GROUP BY e.id ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+				Args: []any{0, 1, "e", "xxx", "yyy", "p", "alice", "bob", 11},
 			},
 		},
 		{
@@ -257,9 +273,10 @@ func TestDefaultQueryBuilder(t *testing.T) {
 			}
 
 			// compare the set of args as to avoid false positives caused by the order of the arguments
-			args := toSet(query[0].Args)
-			expected := toSet(test.query.Args)
-			if !reflect.DeepEqual(args, expected) {
+			args := query[0].Args
+			argsSet := toSet(args)
+			expectedSet := toSet(test.query.Args)
+			if !reflect.DeepEqual(argsSet, expectedSet) {
 				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
 			}
 		})
@@ -299,7 +316,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE (t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?))",
+				SQL:  "SELECT COUNT(DISTINCT e.id) FROM events AS e JOIN tags AS t ON t.event_id = e.id WHERE ((t.key = ? AND t.value IN (?,?)) OR (t.key = ? AND t.value IN (?,?)))",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob"},
 			},
 		},
