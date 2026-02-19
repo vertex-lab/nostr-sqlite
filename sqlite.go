@@ -354,40 +354,32 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	var events []nostr.Event
-	for _, query := range queries {
-		batch, err := s.query(ctx, query)
+	size := totalLimit(filters)
+	events := make([]nostr.Event, 0, size)
+
+	for _, q := range queries {
+		rows, err := s.DB.QueryContext(ctx, q.SQL, q.Args...)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
-			return events, err
-		}
-		events = append(events, batch...)
-	}
-	return events, nil
-}
-
-// query executes a single [Query] and returns the scanned events.
-func (s *Store) query(ctx context.Context, q Query) ([]nostr.Event, error) {
-	rows, err := s.DB.QueryContext(ctx, q.SQL, q.Args...)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch events with query %s: %w", q, err)
-	}
-	defer rows.Close()
-
-	var events []nostr.Event
-	for rows.Next() {
-		var e nostr.Event
-		if err = rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
-			return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
+			return events, fmt.Errorf("failed to fetch events with query %s: %w", q, err)
 		}
 
-		events = append(events, e)
-	}
+		for rows.Next() {
+			var e nostr.Event
+			if err = rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
+				rows.Close()
+				return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
+			}
+			events = append(events, e)
+		}
 
-	if err := rows.Err(); err != nil {
-		return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return events, fmt.Errorf("%w: failed to scan event rows: %w", ErrInternalQuery, err)
+		}
+		rows.Close()
 	}
 	return events, nil
 }
@@ -511,6 +503,19 @@ func toSQL(filter nostr.Filter) (conds []string, args []any) {
 		}
 	}
 	return conds, args
+}
+
+// totalLimit returns the sum of all limits across all filters.
+func totalLimit(filters nostr.Filters) int {
+	if len(filters) == 0 {
+		return 0
+	}
+
+	limit := 0
+	for _, f := range filters {
+		limit += f.Limit
+	}
+	return limit
 }
 
 // in returns the appropriate SQL comparison operator and placeholder(s)
