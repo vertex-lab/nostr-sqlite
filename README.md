@@ -36,22 +36,16 @@ To find all available options, see [options.go](/options.go).
 Save(context.Context, *nostr.Event) (bool, error)
 
 // Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
-// Delete returns true if the event was deleted, false in case of errors or if the event
-// was never present.
+// Delete returns true if the event was deleted, false in case of errors or if the event was not found.
 Delete(context.Context, string) (bool, error)
 
+// DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events
+// that share the same pubkey as the deletion request. It returns the number of events deleted.
+func (s *Store) DeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
+
 // Replace an old event with the new one according to NIP-01.
-//
-// The replacement happens if the event is strictly newer than the stored event
-// within the same 'category' (kind, pubkey, and d-tag if addressable).
-// If no such stored event exists, and the event is a replaceable/addressable kind, it is simply saved.
-//
-// Calling Replace on a non-replaceable/addressable event returns [ErrInvalidReplacement]
-//
-// Replace returns true if the event has been saved/superseded a previous one,
+// It returns true if the event has been saved/superseded a previous one,
 // false in case of errors or if a stored event in the same 'category' is newer or equal.
-//
-// More info here: https://github.com/nostr-protocol/nips/blob/master/01.md#kinds
 Replace(context.Context, *nostr.Event) (bool, error)
 
 // Query stored events matching the provided filters.
@@ -72,7 +66,7 @@ myTrigger = `
     CREATE TRIGGER IF NOT EXISTS e_tags_ai AFTER INSERT ON events
 	WHEN NEW.kind = 1 
 	BEGIN
-	INSERT INTO tags (event_id, key, value)
+	INSERT OR IGNORE INTO tags (event_id, key, value)
 		SELECT NEW.id, 'e', json_extract(value, '$[1]')
 		FROM json_each(NEW.tags)
 		WHERE json_type(value) = 'array' AND json_array_length(value) > 1 AND json_extract(value, '$[0]') = 'e'

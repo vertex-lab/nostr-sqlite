@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -16,9 +17,10 @@ import (
 )
 
 var (
-	ErrInvalidAddressable = errors.New("addressable event must have exactly one (non empty) 'd' tag")
-	ErrInvalidReplacement = errors.New("called Replace on a non-replaceable event")
-	ErrInternalQuery      = errors.New("internal query error")
+	ErrInvalidAddressable     = errors.New("addressable event must have exactly one (non empty) 'd' tag")
+	ErrInvalidReplacement     = errors.New("called Replace on a non-replaceable event")
+	ErrInvalidDeletionRequest = errors.New("deletion request must be kind 5")
+	ErrInternalQuery          = errors.New("internal query error")
 )
 
 //go:embed schema.sql
@@ -188,8 +190,7 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) (bool, error) {
 }
 
 // Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
-// Delete returns true if the event was deleted, false in case of errors or if the event
-// was never present.
+// Delete returns true if the event was deleted, false in case of errors or if the event was not found.
 func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
 	if err != nil {
@@ -206,6 +207,103 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events
+// that share the same pubkey as the deletion request. It returns the number of events deleted.
+//
+// The event is assumed to have been validated before calling this function.
+// Calling DeleteRequest with a non kind-5 event returns [ErrInvalidDeletionRequest].
+// Malformed tags are silently skipped.
+//
+// More info: https://github.com/nostr-protocol/nips/blob/master/09.md
+func (s *Store) DeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
+	if event.Kind != nostr.KindDeletion {
+		return 0, ErrInvalidDeletionRequest
+	}
+
+	eIDs := findAll(event.Tags, "e")
+	aTags := findAll(event.Tags, "a")
+
+	if len(eIDs) == 0 && len(aTags) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var deleted int
+
+	// e tags: single batched DELETE with an IN clause, enforcing pubkey match.
+	if len(eIDs) > 0 {
+		query := "DELETE FROM events WHERE pubkey = ? AND id " + in(eIDs)
+		args := make([]any, 0, 1+len(eIDs))
+		args = append(args, event.PubKey)
+		for _, id := range eIDs {
+			args = append(args, id)
+		}
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete by e tags: %w", err)
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		deleted += int(rows)
+	}
+
+	// a tags: one DELETE per tag, since each has a distinct kind/pubkey/d combination.
+	// Deletes all versions of the addressable event up to the deletion request's created_at.
+	for _, a := range aTags {
+		parts := strings.SplitN(a, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+
+		kind, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+
+		pubkey := parts[1]
+		if pubkey != event.PubKey {
+			continue
+		}
+
+		d := parts[2]
+		if d == "" {
+			continue
+		}
+
+		query := `DELETE FROM events
+			WHERE kind = ? AND pubkey = ? AND created_at <= ?
+			AND id IN (SELECT event_id FROM tags WHERE key = 'd' AND value = ?)`
+		args := []any{kind, pubkey, int64(event.CreatedAt), d}
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete by a tag %q: %w", a, err)
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		deleted += int(rows)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	if deleted > 0 {
+		s.checkOptimize(ctx)
+	}
+	return deleted, nil
 }
 
 // Replace an old event with the new one according to NIP-01.

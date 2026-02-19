@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strconv"
 	"sync"
@@ -412,6 +413,201 @@ func TestDefaultCountBuilder(t *testing.T) {
 			expected := toSet(test.query.Args)
 			if !reflect.DeepEqual(args, expected) {
 				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
+			}
+		})
+	}
+}
+
+func TestDeleteRequest(t *testing.T) {
+	const (
+		alice = "alice"
+		bob   = "bob"
+	)
+
+	tests := []struct {
+		name    string
+		stored  []nostr.Event
+		request nostr.Event
+		err     error
+		deleted int
+	}{
+		{
+			name:    "wrong kind",
+			request: nostr.Event{Kind: 1},
+			err:     ErrInvalidDeletionRequest,
+		},
+		{
+			name:    "no e or a tags",
+			request: nostr.Event{Kind: 5, PubKey: alice},
+		},
+		{
+			name: "e tag: matches pubkey",
+			stored: []nostr.Event{
+				{ID: "event1", PubKey: alice, Kind: 1},
+			},
+			request: nostr.Event{
+				Kind:   5,
+				PubKey: alice,
+				Tags:   nostr.Tags{{"e", "event1"}},
+			},
+			deleted: 1,
+		},
+		{
+			name: "e tag: pubkey mismatch",
+			stored: []nostr.Event{
+				{ID: "event1", PubKey: bob, Kind: 1},
+			},
+			request: nostr.Event{
+				Kind:   5,
+				PubKey: alice,
+				Tags:   nostr.Tags{{"e", "event1"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "e tag: event not found",
+			request: nostr.Event{
+				Kind:   5,
+				PubKey: alice,
+				Tags:   nostr.Tags{{"e", "nonexistent"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "multiple e tags",
+			stored: []nostr.Event{
+				{ID: "e1", PubKey: alice, Kind: 1},
+				{ID: "e2", PubKey: alice, Kind: 1},
+			},
+			request: nostr.Event{
+				Kind:   5,
+				PubKey: alice,
+				Tags:   nostr.Tags{{"e", "e1"}, {"e", "e2"}},
+			},
+			deleted: 2,
+		},
+		{
+			name: "multiple e tags: partial match",
+			stored: []nostr.Event{
+				{ID: "e1", PubKey: alice, Kind: 1},
+			},
+			request: nostr.Event{
+				Kind:   5,
+				PubKey: alice,
+				Tags:   nostr.Tags{{"e", "e1"}, {"e", "nonexistent"}},
+			},
+			deleted: 1,
+		},
+		{
+			name: "a tag: deletes addressable event up to created_at",
+			stored: []nostr.Event{
+				{ID: "addr1", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "test"}}, CreatedAt: 100},
+			},
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "30000:alice:test"}},
+			},
+			deleted: 1,
+		},
+		{
+			name: "a tag: skips addressable event newer than created_at",
+			stored: []nostr.Event{
+				{ID: "addr1", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "test"}}, CreatedAt: 300},
+			},
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "30000:alice:test"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "a tag: pubkey mismatch",
+			stored: []nostr.Event{
+				{ID: "addr1", PubKey: bob, Kind: 30000, Tags: nostr.Tags{{"d", "test"}}, CreatedAt: 100},
+			},
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "30000:bob:test"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "a tag: malformed (missing separators)",
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "notvalid"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "a tag: malformed (non-integer kind)",
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "notakind:alice:test"}},
+			},
+			deleted: 0,
+		},
+		{
+			name: "a tag: multiple versions, deletes only up to created_at",
+			stored: []nostr.Event{
+				{ID: "v1", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "doc"}}, CreatedAt: 50},
+				{ID: "v2", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "doc"}}, CreatedAt: 150},
+				{ID: "v3", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "doc"}}, CreatedAt: 250},
+			},
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"a", "30000:alice:doc"}},
+			},
+			deleted: 2,
+		},
+		{
+			name: "mixed e and a tags",
+			stored: []nostr.Event{
+				{ID: "regular1", PubKey: alice, Kind: 1, CreatedAt: 100},
+				{ID: "addr1", PubKey: alice, Kind: 30000, Tags: nostr.Tags{{"d", "home"}}, CreatedAt: 100},
+			},
+			request: nostr.Event{
+				Kind:      5,
+				PubKey:    alice,
+				CreatedAt: 200,
+				Tags:      nostr.Tags{{"e", "regular1"}, {"a", "30000:alice:home"}},
+			},
+			deleted: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := New(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+
+			for i := range test.stored {
+				if _, err := store.Save(ctx, &test.stored[i]); err != nil {
+					t.Fatalf("Save failed: %v", err)
+				}
+			}
+
+			deleted, err := store.DeleteRequest(ctx, &test.request)
+			if !errors.Is(err, test.err) {
+				t.Fatalf("expected error %v, got %v", test.err, err)
+			}
+			if deleted != test.deleted {
+				t.Fatalf("expected %d deleted, got %d", test.deleted, deleted)
 			}
 		})
 	}
