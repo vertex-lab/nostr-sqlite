@@ -516,12 +516,12 @@ func toSql(filter nostr.Filter) (conds []string, args []any) {
 
 	if filter.Until != nil {
 		conds = append(conds, "e.created_at <= ?")
-		args = append(args, filter.Until.Time().Unix())
+		args = append(args, int64(*filter.Until))
 	}
 
 	if filter.Since != nil {
 		conds = append(conds, "e.created_at >= ?")
-		args = append(args, filter.Since.Time().Unix())
+		args = append(args, int64(*filter.Since))
 	}
 
 	if len(filter.Tags) > 0 {
