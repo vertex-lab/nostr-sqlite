@@ -419,33 +419,23 @@ func (s *Store) CountWithBuilder(ctx context.Context, build QueryBuilder, filter
 }
 
 func DefaultQueryBuilder(filters ...nostr.Filter) ([]Query, error) {
-	switch len(filters) {
-	case 0:
+	if len(filters) == 0 {
 		return nil, nil
-
-	case 1:
-		query, args := buildQuery(filters[0])
-		query += " ORDER BY e.created_at DESC, e.id ASC LIMIT ?"
-		args = append(args, filters[0].Limit)
-		return []Query{{SQL: query, Args: args}}, nil
-
-	default:
-		subQueries := make([]string, 0, len(filters))
-		allArgs := make([]any, 0, len(filters))
-		limit := 0
-
-		for _, filter := range filters {
-			query, args := buildQuery(filter)
-			subQueries = append(subQueries, query)
-			allArgs = append(allArgs, args...)
-			limit += filter.Limit
-		}
-
-		query := "SELECT * FROM (" + strings.Join(subQueries, " UNION ALL ") + ")" +
-			" GROUP BY id ORDER BY created_at DESC, id ASC LIMIT ?"
-		allArgs = append(allArgs, limit)
-		return []Query{{SQL: query, Args: allArgs}}, nil
 	}
+
+	queries := make([]Query, 0, len(filters))
+	for _, filter := range filters {
+		conds, args := toSQL(filter)
+		query := "SELECT e.* FROM events AS e"
+		if len(conds) > 0 {
+			query += " WHERE " + strings.Join(conds, " AND ")
+		}
+		query += " ORDER BY e.created_at DESC, e.id ASC LIMIT ?"
+
+		args = append(args, filter.Limit)
+		queries = append(queries, Query{SQL: query, Args: args})
+	}
+	return queries, nil
 }
 
 func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
@@ -470,15 +460,6 @@ func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
 
 	query := "SELECT COUNT(*) FROM events AS e WHERE " + strings.Join(groups, " OR ")
 	return []Query{{SQL: query, Args: allArgs}}, nil
-}
-
-func buildQuery(filter nostr.Filter) (string, []any) {
-	conds, args := toSQL(filter)
-	query := "SELECT e.* FROM events AS e"
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
-	}
-	return query, args
 }
 
 // toSQL converts a nostr.Filter to a list of SQL conditions and arguments.

@@ -184,23 +184,23 @@ func TestDefaultQueryBuilder(t *testing.T) {
 	tests := []struct {
 		name    string
 		filters nostr.Filters
-		query   Query
+		queries []Query
 	}{
 		{
 			name:    "single filter, kind",
 			filters: nostr.Filters{{Kinds: []int{0, 1}, Limit: 100}},
-			query: Query{
+			queries: []Query{{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.kind IN (?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{0, 1, 100},
-			},
+			}},
 		},
 		{
 			name:    "single filter, authors",
 			filters: nostr.Filters{{Authors: []string{"aaa", "bbb", "xxx"}, Limit: 11}},
-			query: Query{
+			queries: []Query{{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.pubkey IN (?,?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"aaa", "bbb", "xxx", 11},
-			},
+			}},
 		},
 		{
 			name: "single filter, tag",
@@ -210,11 +210,10 @@ func TestDefaultQueryBuilder(t *testing.T) {
 					"e": {"xxx"},
 				},
 			}},
-
-			query: Query{
+			queries: []Query{{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value = ?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", 11},
-			},
+			}},
 		},
 		{
 			name: "single filter, tags",
@@ -225,11 +224,10 @@ func TestDefaultQueryBuilder(t *testing.T) {
 					"p": {"alice", "bob"},
 				},
 			}},
-
-			query: Query{
+			queries: []Query{{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob", 11},
-			},
+			}},
 		},
 		{
 			name: "single filter, kinds and tags",
@@ -241,11 +239,10 @@ func TestDefaultQueryBuilder(t *testing.T) {
 					"p": {"alice", "bob"},
 				},
 			}},
-
-			query: Query{
+			queries: []Query{{
 				SQL:  "SELECT e.* FROM events AS e WHERE e.kind IN (?,?) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
 				Args: []any{0, 1, "e", "xxx", "yyy", "p", "alice", "bob", 11},
-			},
+			}},
 		},
 		{
 			name: "multiple filter",
@@ -253,31 +250,41 @@ func TestDefaultQueryBuilder(t *testing.T) {
 				{Kinds: []int{0, 1}, Limit: 69},
 				{Authors: []string{"aaa", "bbb"}, Limit: 420},
 			},
-			query: Query{
-				SQL:  "SELECT * FROM (SELECT e.* FROM events AS e WHERE e.kind IN (?,?) UNION ALL SELECT e.* FROM events AS e WHERE e.pubkey IN (?,?)) GROUP BY id ORDER BY created_at DESC, id ASC LIMIT ?",
-				Args: []any{0, 1, "aaa", "bbb", 69 + 420},
+			queries: []Query{
+				{
+					SQL:  "SELECT e.* FROM events AS e WHERE e.kind IN (?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+					Args: []any{0, 1, 69},
+				},
+				{
+					SQL:  "SELECT e.* FROM events AS e WHERE e.pubkey IN (?,?) ORDER BY e.created_at DESC, e.id ASC LIMIT ?",
+					Args: []any{"aaa", "bbb", 420},
+				},
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			query, err := DefaultQueryBuilder(test.filters...)
+			queries, err := DefaultQueryBuilder(test.filters...)
 			if err != nil {
 				t.Fatalf("expected error nil, got %v", err)
 			}
 
-			sql := query[0].SQL
-			if sql != test.query.SQL {
-				t.Fatalf("expected SQL %v, got %v", test.query.SQL, sql)
+			if len(queries) != len(test.queries) {
+				t.Fatalf("expected %d queries, got %d", len(test.queries), len(queries))
 			}
 
-			// compare the set of args as to avoid false positives caused by the order of the arguments
-			args := query[0].Args
-			argsSet := toSet(args)
-			expectedSet := toSet(test.query.Args)
-			if !reflect.DeepEqual(argsSet, expectedSet) {
-				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
+			for i, expected := range test.queries {
+				if queries[i].SQL != expected.SQL {
+					t.Fatalf("query[%d]: expected SQL %v, got %v", i, expected.SQL, queries[i].SQL)
+				}
+
+				// compare the set of args to avoid false positives caused by argument order
+				argsSet := toSet(queries[i].Args)
+				expectedSet := toSet(expected.Args)
+				if !reflect.DeepEqual(argsSet, expectedSet) {
+					t.Fatalf("query[%d]: expected Args %v, got %v", i, expected.Args, queries[i].Args)
+				}
 			}
 		})
 	}
