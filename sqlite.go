@@ -45,7 +45,7 @@ var schema string
 //
 // More about WAL mode and concurrency: https://sqlite.org/wal.html
 type Store struct {
-	*sql.DB
+	DB *sql.DB
 
 	optimizeEvery int32        // the threshold of writes that trigger PRAGMA optimize
 	writeCount    atomic.Int32 // successful writes since last PRAGMA optimize
