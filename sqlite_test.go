@@ -293,7 +293,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			name:    "single filter, kind",
 			filters: nostr.Filters{{Kinds: []int{0}}},
 			query: Query{
-				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.kind = ?",
+				SQL:  "SELECT COUNT(*) FROM events AS e WHERE (e.kind = ?)",
 				Args: []any{0},
 			},
 		},
@@ -301,7 +301,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			name:    "single filter, authors",
 			filters: nostr.Filters{{Authors: []string{"aaa", "bbb", "xxx"}}},
 			query: Query{
-				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.pubkey IN (?,?,?)",
+				SQL:  "SELECT COUNT(*) FROM events AS e WHERE (e.pubkey IN (?,?,?))",
 				Args: []any{"aaa", "bbb", "xxx"},
 			},
 		},
@@ -316,7 +316,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 			}},
 
 			query: Query{
-				SQL:  "SELECT COUNT(e.id) FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?))",
+				SQL:  "SELECT COUNT(*) FROM events AS e WHERE (e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)))",
 				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob"},
 			},
 		},
@@ -327,7 +327,7 @@ func TestDefaultCountBuilder(t *testing.T) {
 				{Authors: []string{"aaa", "bbb"}},
 			},
 			query: Query{
-				SQL:  "SELECT ((SELECT COUNT(e.id) FROM events AS e WHERE e.kind IN (?,?)) + (SELECT COUNT(e.id) FROM events AS e WHERE e.pubkey IN (?,?)))",
+				SQL:  "SELECT COUNT(*) FROM events AS e WHERE (e.kind IN (?,?)) OR (e.pubkey IN (?,?))",
 				Args: []any{0, 1, "aaa", "bbb"},
 			},
 		},

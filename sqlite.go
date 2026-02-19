@@ -449,32 +449,31 @@ func DefaultQueryBuilder(filters ...nostr.Filter) ([]Query, error) {
 }
 
 func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
-	switch len(filters) {
-	case 0:
+	if len(filters) == 0 {
 		return nil, nil
+	}
 
-	case 1:
-		query, args := buildCount(filters[0])
-		return []Query{{SQL: query, Args: args}}, nil
+	groups := make([]string, 0, len(filters))
+	allArgs := make([]any, 0)
 
-	default:
-		subQueries := make([]string, 0, len(filters))
-		allArgs := make([]any, 0, len(filters))
-
-		for _, filter := range filters {
-			query, args := buildCount(filter)
-			subQueries = append(subQueries, "("+query+")")
-			allArgs = append(allArgs, args...)
+	for _, filter := range filters {
+		conds, args := toSQL(filter)
+		if len(conds) == 0 {
+			// this filter matches all events, so the OR is universally true.
+			// Return all the events in the database.
+			return []Query{{SQL: "SELECT COUNT(*) FROM events AS e", Args: nil}}, nil
 		}
 
-		// TODO: we are summing all counts together, without any deduplication
-		query := "SELECT (" + strings.Join(subQueries, " + ") + ")"
-		return []Query{{SQL: query, Args: allArgs}}, nil
+		groups = append(groups, "("+strings.Join(conds, " AND ")+")")
+		allArgs = append(allArgs, args...)
 	}
+
+	query := "SELECT COUNT(*) FROM events AS e WHERE " + strings.Join(groups, " OR ")
+	return []Query{{SQL: query, Args: allArgs}}, nil
 }
 
 func buildQuery(filter nostr.Filter) (string, []any) {
-	conds, args := toSql(filter)
+	conds, args := toSQL(filter)
 	query := "SELECT e.* FROM events AS e"
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
@@ -482,17 +481,8 @@ func buildQuery(filter nostr.Filter) (string, []any) {
 	return query, args
 }
 
-func buildCount(filter nostr.Filter) (string, []any) {
-	conds, args := toSql(filter)
-	query := "SELECT COUNT(e.id) FROM events AS e"
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
-	}
-	return query, args
-}
-
-// toSql converts a nostr.Filter to a SQL condition string and arguments.
-func toSql(filter nostr.Filter) (conds []string, args []any) {
+// toSQL converts a nostr.Filter to a list of SQL conditions and arguments.
+func toSQL(filter nostr.Filter) (conds []string, args []any) {
 	if len(filter.IDs) > 0 {
 		conds = append(conds, "e.id "+in(filter.IDs))
 		for _, id := range filter.IDs {
