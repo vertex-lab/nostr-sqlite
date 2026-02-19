@@ -85,21 +85,6 @@ store, err := sqlite.New(
 
 Sqlite can often outperform server-based databases (e.g. Postgres) as the network overhead is often the major bottleneck. However, when performing many thousands of concurrent writes every second, sqlite performance degrades because there can only be a single writer at a time. More in the [concurrency section](#concurrency).
 
-```bash
-goos: linux
-goarch: amd64
-pkg: github.com/vertex-lab/nostr-sqlite
-cpu: Intel(R) Core(TM) i5-4690K CPU @ 3.50GHz
-BenchmarkSaveRegular-4                      8432            127072 ns/op             936 B/op         14 allocs/op
-BenchmarkSaveAddressable-4                  6706            168573 ns/op             984 B/op         17 allocs/op
-BenchmarkDeleteRegular-4                   28608             35709 ns/op             272 B/op         12 allocs/op
-BenchmarkDeleteAddressable-4               28593             36695 ns/op             272 B/op         12 allocs/op
-BenchmarkReplaceReplaceable-4               8464            142132 ns/op            2919 B/op         80 allocs/op
-BenchmarkReplaceAddressable-4               5028            212964 ns/op            3148 B/op         87 allocs/op
-PASS
-ok      github.com/vertex-lab/nostr-sqlite      34.865s
-```
-
 ## Concurrency
 
 This store implements all recommended concurrency optimisations for sqlite,

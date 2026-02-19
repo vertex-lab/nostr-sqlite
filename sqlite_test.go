@@ -621,9 +621,8 @@ func BenchmarkSaveRegular(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	events := make([]*nostr.Event, size)
-	for i := range size {
+	events := make([]*nostr.Event, b.N)
+	for i := range b.N {
 		events[i] = &nostr.Event{
 			ID:   strconv.Itoa(i),
 			Kind: 1,
@@ -632,7 +631,7 @@ func BenchmarkSaveRegular(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Save(ctx, events[i%size])
+		_, err := store.Save(ctx, events[i])
 		if err != nil {
 			b.Fatalf("Save failed: %v", err)
 		}
@@ -647,9 +646,8 @@ func BenchmarkSaveAddressable(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	events := make([]*nostr.Event, size)
-	for i := range size {
+	events := make([]*nostr.Event, b.N)
+	for i := range b.N {
 		events[i] = &nostr.Event{
 			ID:   strconv.Itoa(i),
 			Kind: 30_000,
@@ -659,14 +657,14 @@ func BenchmarkSaveAddressable(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Save(ctx, events[i%size])
+		_, err := store.Save(ctx, events[i])
 		if err != nil {
 			b.Fatalf("Save failed: %v", err)
 		}
 	}
 }
 
-func BenchmarkDeleteRegular(b *testing.B) {
+func BenchmarkDelete(b *testing.B) {
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -674,9 +672,8 @@ func BenchmarkDeleteRegular(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	ids := make([]string, size)
-	for i := range size {
+	ids := make([]string, b.N)
+	for i := range b.N {
 		ids[i] = strconv.Itoa(i)
 		event := &nostr.Event{
 			ID:   ids[i],
@@ -691,14 +688,14 @@ func BenchmarkDeleteRegular(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Delete(ctx, ids[i%size])
+		_, err := store.Delete(ctx, ids[i])
 		if err != nil {
 			b.Fatalf("Delete failed: %v", err)
 		}
 	}
 }
 
-func BenchmarkDeleteAddressable(b *testing.B) {
+func BenchmarkDeleteRequestETags(b *testing.B) {
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
 	if err != nil {
@@ -706,27 +703,62 @@ func BenchmarkDeleteAddressable(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	ids := make([]string, size)
-	for i := range size {
+	ids := make([]string, b.N)
+	for i := range b.N {
 		ids[i] = strconv.Itoa(i)
-		event := &nostr.Event{
-			ID:   ids[i],
-			Kind: 30_000,
-			Tags: nostr.Tags{{"d", ids[i]}},
-		}
-
-		_, err := store.Save(ctx, event)
-		if err != nil {
+		if _, err := store.Save(ctx, &nostr.Event{
+			ID:     ids[i],
+			PubKey: "pubkey",
+			Kind:   1,
+		}); err != nil {
 			b.Fatalf("failed to setup: %v", err)
 		}
 	}
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Delete(ctx, ids[i%size])
-		if err != nil {
-			b.Fatalf("Delete failed: %v", err)
+		request := &nostr.Event{
+			Kind:   5,
+			PubKey: "pubkey",
+			Tags:   nostr.Tags{{"e", ids[i]}},
+		}
+		if _, err := store.DeleteRequest(ctx, request); err != nil {
+			b.Fatalf("DeleteRequest failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkDeleteRequestATags(b *testing.B) {
+	path := b.TempDir() + "/test.sqlite"
+	store, err := New(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer store.Close()
+
+	ids := make([]string, b.N)
+	for i := range b.N {
+		ids[i] = strconv.Itoa(i)
+		if _, err := store.Save(ctx, &nostr.Event{
+			ID:     ids[i],
+			PubKey: "pubkey",
+			Kind:   30_000,
+			Tags:   nostr.Tags{{"d", ids[i]}},
+		}); err != nil {
+			b.Fatalf("failed to setup: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := range b.N {
+		request := &nostr.Event{
+			Kind:      5,
+			PubKey:    "pubkey",
+			CreatedAt: 1000,
+			Tags:      nostr.Tags{{"a", "30000:pubkey:" + ids[i]}},
+		}
+		if _, err := store.DeleteRequest(ctx, request); err != nil {
+			b.Fatalf("DeleteRequest failed: %v", err)
 		}
 	}
 }
@@ -739,9 +771,8 @@ func BenchmarkReplaceReplaceable(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	events := make([]*nostr.Event, size)
-	for i := range size {
+	events := make([]*nostr.Event, b.N)
+	for i := range b.N {
 		events[i] = &nostr.Event{
 			ID:        strconv.Itoa(i),
 			Kind:      0,
@@ -751,7 +782,7 @@ func BenchmarkReplaceReplaceable(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Replace(ctx, events[i%size])
+		_, err := store.Replace(ctx, events[i])
 		if err != nil {
 			b.Fatalf("Replace failed: %v", err)
 		}
@@ -766,9 +797,8 @@ func BenchmarkReplaceAddressable(b *testing.B) {
 	}
 	defer store.Close()
 
-	size := 10_000
-	events := make([]*nostr.Event, size)
-	for i := range size {
+	events := make([]*nostr.Event, b.N)
+	for i := range b.N {
 		events[i] = &nostr.Event{
 			ID:        strconv.Itoa(i),
 			Kind:      30_000,
@@ -779,8 +809,7 @@ func BenchmarkReplaceAddressable(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Replace(ctx, events[i%size])
-		if err != nil {
+		if _, err := store.Replace(ctx, events[i]); err != nil {
 			b.Fatalf("Replace failed: %v", err)
 		}
 	}
