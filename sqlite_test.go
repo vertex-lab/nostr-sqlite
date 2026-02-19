@@ -106,6 +106,61 @@ func TestSave(t *testing.T) {
 	}
 }
 
+func TestQuery(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// seed 10 kind 0 and 10 kind 1 events
+	events := make([]nostr.Event, 0, 20)
+	for i := range 10 {
+		events = append(events, nostr.Event{
+			ID:        "kind0-" + strconv.Itoa(i),
+			Kind:      0,
+			CreatedAt: nostr.Timestamp(i),
+		})
+
+		events = append(events, nostr.Event{
+			ID:        "kind1-" + strconv.Itoa(i),
+			Kind:      1,
+			CreatedAt: nostr.Timestamp(i),
+		})
+	}
+
+	for _, event := range events {
+		if _, err := store.Save(ctx, &event); err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+	}
+
+	results, err := store.Query(ctx,
+		nostr.Filter{Kinds: []int{0}, Limit: 2},
+		nostr.Filter{Kinds: []int{1}, Limit: 5},
+	)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	kind0, kind1 := 0, 0
+	for _, e := range results {
+		switch e.Kind {
+		case 0:
+			kind0++
+		case 1:
+			kind1++
+		}
+	}
+
+	if kind0 != 2 {
+		t.Errorf("expected 2 kind-0 events, got %d", kind0)
+	}
+	if kind1 != 5 {
+		t.Errorf("expected 5 kind-1 events, got %d", kind1)
+	}
+}
+
 func TestReplace(t *testing.T) {
 	event10 := nostr.Event{ID: "bbb", Kind: 0, PubKey: "key", CreatedAt: 10}
 	event100 := nostr.Event{ID: "aaa", Kind: 0, PubKey: "key", CreatedAt: 100}
