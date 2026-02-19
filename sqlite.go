@@ -355,29 +355,39 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 	}
 
 	var events []nostr.Event
-	for i, query := range queries {
-		rows, err := s.DB.QueryContext(ctx, query.SQL, query.Args...)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
+	for _, query := range queries {
+		batch, err := s.query(ctx, query)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch events with query %s: %w", queries[i], err)
+			return events, err
 		}
-		defer rows.Close()
+		events = append(events, batch...)
+	}
+	return events, nil
+}
 
-		for rows.Next() {
-			var event nostr.Event
-			err = rows.Scan(&event.ID, &event.PubKey, &event.CreatedAt, &event.Kind, &event.Tags, &event.Content, &event.Sig)
-			if err != nil {
-				return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
-			}
+// query executes a single [Query] and returns the scanned events.
+func (s *Store) query(ctx context.Context, q Query) ([]nostr.Event, error) {
+	rows, err := s.DB.QueryContext(ctx, q.SQL, q.Args...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch events with query %s: %w", q, err)
+	}
+	defer rows.Close()
 
-			events = append(events, event)
-		}
-
-		if err := rows.Err(); err != nil {
+	var events []nostr.Event
+	for rows.Next() {
+		var e nostr.Event
+		if err = rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
 			return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
 		}
+
+		events = append(events, e)
+	}
+
+	if err := rows.Err(); err != nil {
+		return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
 	}
 	return events, nil
 }
