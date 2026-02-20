@@ -37,6 +37,34 @@ func WithBusyTimeout(d time.Duration) Option {
 	}
 }
 
+// ByteSize is a typed integer representing a number of bytes.
+// Use the KiB and MiB constants (or multiples thereof) to express
+// values in a readable way, e.g. 32 * sqlite.MiB.
+type ByteSize int64
+
+const (
+	KiB ByteSize = 1024
+	MiB ByteSize = 1024 * KiB
+)
+
+// WithCacheSize sets the SQLite PRAGMA cache_size.
+// The value is converted to kibibytes and passed as a negative integer,
+// which is the portable, page-size-independent form accepted by SQLite.
+// The minimum accepted value is 1 KiB.
+func WithCacheSize(size ByteSize) Option {
+	return func(s *Store) error {
+		if size < KiB {
+			return fmt.Errorf("cache size must be at least 1 KiB, got %d bytes", int64(size))
+		}
+		kib := size / KiB
+		cmd := fmt.Sprintf("PRAGMA cache_size = %d", -kib)
+		if _, err := s.DB.Exec(cmd); err != nil {
+			return fmt.Errorf("failed to set cache size: %w", err)
+		}
+		return nil
+	}
+}
+
 // WithOptimisationEvery sets how many writes trigger a PRAGMA optimize operation.
 func WithOptimisationEvery(n int) Option {
 	return func(s *Store) error {

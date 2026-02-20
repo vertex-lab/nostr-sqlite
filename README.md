@@ -20,6 +20,7 @@ store, err := sqlite.New(
     "/your/db/path/example.sqlite",
     sqlite.WithEventPolicy(myPolicy)
     sqlite.WithAdditionalSchema(mySchema),
+    sqlite.WithCacheSize(64 * sqlite.MiB),
 )
 ```
 

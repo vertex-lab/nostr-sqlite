@@ -65,21 +65,20 @@ func New(path string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to sqlite3 at %s: %w", path, err)
 	}
-
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to apply base schema: %w", err)
 	}
-
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
 	}
-
 	if _, err := db.Exec("PRAGMA busy_timeout = 1000;"); err != nil {
 		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
 	}
-
 	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		return nil, fmt.Errorf("failed to activate foreign keys: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA cache_size = -64000"); err != nil {
+		return nil, fmt.Errorf("failed to set default cache size: %w", err)
 	}
 
 	store := &Store{
