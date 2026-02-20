@@ -89,13 +89,13 @@ Sqlite can often outperform server-based databases (e.g. Postgres) as the networ
 ## Concurrency
 
 This store implements all recommended concurrency optimisations for sqlite,
-such as `journal_mode=WAL` and `busy_timeout=1000`.
+such as `journal_mode=WAL` and `busy_timeout=5000`.
 
-However, sqlite fundamental limitation remains: there can only be one writer at a time. If two write operations are called concurrently, one will get the database lock, while the other will be blocked waiting. The default maximal wait before returning an error is 1s.
+However, sqlite fundamental limitation remains: there can only be one writer at a time. If two write operations are called concurrently, one will get the database lock, while the other will be blocked waiting. The default maximal wait before returning an error is 5s.
 
 Under heavy concurrency, it is possible that this wait is not enough for all previous queued operations to complete, resulting in the error `sqlite3.ErrBusy` to be returned.
 To reduce the likelihood of this happening, you can:
-- increase the `busy_timeout` with the option `WithBusyTimeout` (default is 1s).
+- increase the `busy_timeout` with the option `WithBusyTimeout` (default is 5s).
 - provide synchronisation, for example with a mutex or channel(s). This however won't help if there are other programs writing to the same sqlite file.
 
 If instead you want to handle all `sqlite3.ErrBusy` in your application,
