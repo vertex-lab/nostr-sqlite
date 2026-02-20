@@ -20,7 +20,6 @@ var (
 	ErrInvalidAddressable     = errors.New("addressable event must have exactly one (non empty) 'd' tag")
 	ErrInvalidReplacement     = errors.New("called Replace on a non-replaceable event")
 	ErrInvalidDeletionRequest = errors.New("deletion request must be kind 5")
-	ErrInternalQuery          = errors.New("internal query error")
 )
 
 //go:embed schema.sql
@@ -468,14 +467,14 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 			var e nostr.Event
 			if err = rows.Scan(&e.ID, &e.PubKey, &e.CreatedAt, &e.Kind, &e.Tags, &e.Content, &e.Sig); err != nil {
 				rows.Close()
-				return events, fmt.Errorf("%w: failed to scan event row: %w", ErrInternalQuery, err)
+				return events, fmt.Errorf("failed to scan event row: %w", err)
 			}
 			events = append(events, e)
 		}
 
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return events, fmt.Errorf("%w: failed to scan event rows: %w", ErrInternalQuery, err)
+			return events, fmt.Errorf("failed to scan event rows: %w", err)
 		}
 		rows.Close()
 	}
