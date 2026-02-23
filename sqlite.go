@@ -33,11 +33,11 @@ var schema string
 // architecture of SQLite, there can only be one writer at the time.
 //
 // This limitation remains even after applying the recommended concurrency optimisations,
-// such as journal_mode=WAL and PRAGMA busy_timeout=1s, which are applied by default in this implementation.
+// such as journal_mode=WAL and PRAGMA busy_timeout=5s, which are applied by default in this implementation.
 //
 // Therefore it remains possible that methods return the error [sqlite3.ErrBusy].
 // To reduce the likelihood of this happening, you can:
-//   - increase the busy_timeout with the option [WithBusyTimeout] (default is 1s).
+//   - increase the busy_timeout with the option [WithBusyTimeout] (default is 5s).
 //   - provide synchronisation, for example with a mutex or channel(s). This however won't
 //     help if there are other programs writing to the same sqlite file.
 //
