@@ -76,8 +76,8 @@ func WithOptimisationEvery(n int) Option {
 	}
 }
 
-// WithEventPolicy sets a custom [nastro.EventPolicy] on the Store.
-// It will be used to validate events before inserting them into the database.
+// WithEventPolicy sets a custom event policy on the Store, which will be used to validate events
+// before inserting them into the database.
 func WithEventPolicy(p EventPolicy) Option {
 	return func(s *Store) error {
 		s.eventPolicy = p
@@ -93,8 +93,8 @@ func WithoutEventPolicy() Option {
 	}
 }
 
-// WithFilterPolicy sets a custom [nastro.FilterPolicy] on the Store.
-// It will be used to validate and modify filters before executing queries.
+// WithFilterPolicy sets a custom filter policy on the Store, which will be used to validate and modify
+// filters before executing queries.
 func WithFilterPolicy(p FilterPolicy) Option {
 	return func(s *Store) error {
 		s.filterPolicy = p
