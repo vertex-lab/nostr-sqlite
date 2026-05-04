@@ -42,7 +42,7 @@ Delete(context.Context, string) (bool, error)
 
 // DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events
 // that share the same pubkey as the deletion request. It returns the number of events deleted.
-func (s *Store) DeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
+DeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
 
 // Replace an old event with the new one according to NIP-01.
 // It returns true if the event has been saved/superseded a previous one,
@@ -54,6 +54,9 @@ Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error)
 
 // Count stored events matching the provided filters.
 Count(ctx context.Context, filters ...nostr.Filter) (int64, error)
+
+// Has returns true if the store contains at least one event matching the provided filters.
+Has(ctx context.Context, filters ...nostr.Filter) (bool, error)
 ```
 
 ## Database Schema
