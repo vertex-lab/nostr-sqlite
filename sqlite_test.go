@@ -162,6 +162,37 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestWithLetterTagsIndexing(t *testing.T) {
+	store, err := New(":memory:", WithLetterTagsIndexing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	events := []nostr.Event{
+		{ID: "e1", Kind: 1, Tags: nostr.Tags{{"e", "ref1"}, {"e", "ref2"}, {"p", "pubkey1"}}}, // 3 tags
+		{ID: "e2", Kind: 1, Tags: nostr.Tags{{"t", "hashtag"}, {"p", "pubkey2"}}},             // 2 tags
+		{ID: "e3", Kind: 30000, Tags: nostr.Tags{{"d", "my-doc"}, {"e", "ref3"}}},             // 2 tags
+	}
+
+	for i := range events {
+		if _, err := store.Save(ctx, &events[i]); err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+	}
+
+	var count int
+	row := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM tags")
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("failed to count tags: %v", err)
+	}
+
+	const expected = 7
+	if count != expected {
+		t.Errorf("expected %d indexed tags, got %d", expected, count)
+	}
+}
+
 func TestCount(t *testing.T) {
 	store, err := New(":memory:")
 	if err != nil {

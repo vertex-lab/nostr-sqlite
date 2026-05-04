@@ -10,6 +10,27 @@ import (
 
 type Option func(*Store) error
 
+// WithLetterTagsIndexing creates a trigger that indexes all single-letter tags (a-z, A-Z)
+// for all events. This allows querying by any single-letter tag using the default query builder.
+//
+// By default, only the 'd' tag of addressable events (kind 30000-39999) is indexed.
+// Use this option if you need to query events by other tags such as 'e', 'p', 't', etc.
+//
+// Note: this only applies to events inserted after the option is applied.
+// Existing events in the database will not be re-indexed.
+func WithLetterTagsIndexing() Option {
+	return WithAdditionalSchema(`
+		CREATE TRIGGER IF NOT EXISTS single_letter_tags_ai AFTER INSERT ON events
+		BEGIN
+			INSERT OR IGNORE INTO tags (event_id, key, value)
+				SELECT NEW.id, json_extract(value, '$[0]'), json_extract(value, '$[1]')
+				FROM json_each(NEW.tags)
+				WHERE json_type(value) = 'array'
+				  AND json_array_length(value) > 1
+				  AND json_extract(value, '$[0]') GLOB '[a-zA-Z]';
+		 END;`)
+}
+
 // WithAdditionalSchema allows to specify an additional database schema, like new tables,
 // virtual tables, indexes and triggers.
 func WithAdditionalSchema(schema string) Option {

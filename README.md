@@ -55,27 +55,7 @@ Has(ctx context.Context, filters ...nostr.Filter) (bool, error)
 
 The database schema contains two tables, one for the events, and one for the tags. By default, only the first `d` tag of addressable events is added to the tags table, making it efficient to fetch events in the same "category" (same `kind`, `pubkey` and `d` tag).
 
-To index more tags, you can add triggers in the contructor using the `WithAdditionalSchema` option. Only the tags indexed in the tags table will be used in queries by the default query builder.
-
-```golang
-myTrigger = `
-    CREATE TRIGGER IF NOT EXISTS e_tags_ai AFTER INSERT ON events
-	WHEN NEW.kind = 1 
-	BEGIN
-	INSERT OR IGNORE INTO tags (event_id, key, value)
-		SELECT NEW.id, 'e', json_extract(value, '$[1]')
-		FROM json_each(NEW.tags)
-		WHERE json_type(value) = 'array' AND json_array_length(value) > 1 AND json_extract(value, '$[0]') = 'e'
-		LIMIT 1;
-	END;`
-
-store, err := sqlite.New(
-    "/your/db/path/example.sqlite",
-    sqlite.WithAdditionalSchema(myTrigger),
-)
-
-// Now querying for kind 1 events with specific "e" tags can return results
-```
+To index more tags, you can either use the built-in `WithLetterTagsIndexing` option, or add your own triggers via `WithAdditionalSchema`. Only the tags indexed in the tags table will be used in queries by the default query builder.
 
 ## Performance
 
