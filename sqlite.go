@@ -436,6 +436,8 @@ func (s *Store) replace(
 }
 
 // Query stored events matching the provided filters.
+// The filters are validated and modified by the [Store.queryPolicy] before executing the query.
+// The query is built using the [Store.queryBuilder] and executed against the database.
 func (s *Store) Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error) {
 	filters, err := s.queryPolicy(filters...)
 	if err != nil {
@@ -478,6 +480,8 @@ func (s *Store) Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Eve
 }
 
 // Count stored events matching the provided filters.
+// The filters are validated and modified by the [Store.countPolicy] before executing the query.
+// The query is built using the [Store.countBuilder] and executed against the database.
 func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, error) {
 	filters, err := s.countPolicy(filters...)
 	if err != nil {
@@ -501,6 +505,33 @@ func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, erro
 		total += count
 	}
 	return total, nil
+}
+
+// Has returns true if the store contains at least one event matching the provided filters.
+// The filters are validated and modified by the [Store.countPolicy] before executing the query.
+func (s *Store) Has(ctx context.Context, filters ...nostr.Filter) (bool, error) {
+	filters, err := s.countPolicy(filters...)
+	if err != nil {
+		return false, err
+	}
+
+	queries, err := DefaultHasBuilder(filters...)
+	if err != nil {
+		return false, fmt.Errorf("failed to build has query: %w", err)
+	}
+
+	for _, query := range queries {
+		err := s.DB.QueryRowContext(ctx, query.SQL, query.Args...).Scan(new(int))
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("failed to execute has query %s: %w", query, err)
+		}
+		// did not get sql.ErrNoRows, so the query matched at least one event
+		return true, nil
+	}
+	return false, nil
 }
 
 func DefaultQueryBuilder(filters ...nostr.Filter) ([]Query, error) {
@@ -545,6 +576,24 @@ func DefaultCountBuilder(filters ...nostr.Filter) ([]Query, error) {
 
 	query := "SELECT COUNT(*) FROM events AS e WHERE " + strings.Join(groups, " OR ")
 	return []Query{{SQL: query, Args: allArgs}}, nil
+}
+
+func DefaultHasBuilder(filters ...nostr.Filter) ([]Query, error) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+
+	queries := make([]Query, 0, len(filters))
+	for _, filter := range filters {
+		conds, args := toSQL(filter)
+		query := "SELECT 1 FROM events AS e"
+		if len(conds) > 0 {
+			query += " WHERE " + strings.Join(conds, " AND ")
+		}
+		query += " LIMIT 1"
+		queries = append(queries, Query{SQL: query, Args: args})
+	}
+	return queries, nil
 }
 
 // toSQL converts a nostr.Filter to a list of SQL conditions and arguments.

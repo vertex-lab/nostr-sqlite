@@ -162,6 +162,105 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestCount(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// seed 10 kind 0 and 10 kind 1 events
+	for i := range 10 {
+		for _, e := range []nostr.Event{
+			{ID: "kind0-" + strconv.Itoa(i), Kind: 0, CreatedAt: nostr.Timestamp(i)},
+			{ID: "kind1-" + strconv.Itoa(i), Kind: 1, CreatedAt: nostr.Timestamp(i)},
+		} {
+			if _, err := store.Save(ctx, &e); err != nil {
+				t.Fatalf("Save failed: %v", err)
+			}
+		}
+	}
+
+	count, err := store.Count(ctx, nostr.Filter{Kinds: []int{0}})
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 10 {
+		t.Errorf("expected 10 kind-0 events, got %d", count)
+	}
+
+	// multiple filters are OR-ed: total should be 20
+	count, err = store.Count(ctx,
+		nostr.Filter{Kinds: []int{0}},
+		nostr.Filter{Kinds: []int{1}},
+	)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 20 {
+		t.Errorf("expected 20 events across both kinds, got %d", count)
+	}
+
+	// non-matching filter
+	count, err = store.Count(ctx, nostr.Filter{Kinds: []int{2}})
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 kind-2 events, got %d", count)
+	}
+}
+
+func TestHas(t *testing.T) {
+	store, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// seed 10 kind 0 and 10 kind 1 events
+	for i := range 10 {
+		for _, e := range []nostr.Event{
+			{ID: "kind0-" + strconv.Itoa(i), Kind: 0, CreatedAt: nostr.Timestamp(i)},
+			{ID: "kind1-" + strconv.Itoa(i), Kind: 1, CreatedAt: nostr.Timestamp(i)},
+		} {
+			if _, err := store.Save(ctx, &e); err != nil {
+				t.Fatalf("Save failed: %v", err)
+			}
+		}
+	}
+
+	// matching filter
+	has, err := store.Has(ctx, nostr.Filter{Kinds: []int{0}})
+	if err != nil {
+		t.Fatalf("Has failed: %v", err)
+	}
+	if !has {
+		t.Errorf("expected true for kind-0, got false")
+	}
+
+	// non-matching filter
+	has, err = store.Has(ctx, nostr.Filter{Kinds: []int{2}})
+	if err != nil {
+		t.Fatalf("Has failed: %v", err)
+	}
+	if has {
+		t.Errorf("expected false for kind-2, got true")
+	}
+
+	// multiple filters: true if any matches
+	has, err = store.Has(ctx,
+		nostr.Filter{Kinds: []int{2}},
+		nostr.Filter{Kinds: []int{1}},
+	)
+	if err != nil {
+		t.Fatalf("Has failed: %v", err)
+	}
+	if !has {
+		t.Errorf("expected true when at least one filter matches, got false")
+	}
+}
+
 func TestReplace(t *testing.T) {
 	event10 := nostr.Event{ID: "bbb", Kind: 0, PubKey: "key", CreatedAt: 10}
 	event100 := nostr.Event{ID: "aaa", Kind: 0, PubKey: "key", CreatedAt: 100}
@@ -413,6 +512,95 @@ func TestDefaultCountBuilder(t *testing.T) {
 			expected := toSet(test.query.Args)
 			if !reflect.DeepEqual(args, expected) {
 				t.Fatalf("expected Args %v, got %v", test.query.Args, args)
+			}
+		})
+	}
+}
+
+func TestDefaultHasBuilder(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters nostr.Filters
+		queries []Query
+	}{
+		{
+			name:    "single filter, kind",
+			filters: nostr.Filters{{Kinds: []int{1}}},
+			queries: []Query{{
+				SQL:  "SELECT 1 FROM events AS e WHERE e.kind = ? LIMIT 1",
+				Args: []any{1},
+			}},
+		},
+		{
+			name:    "single filter, authors",
+			filters: nostr.Filters{{Authors: []string{"aaa", "bbb", "xxx"}}},
+			queries: []Query{{
+				SQL:  "SELECT 1 FROM events AS e WHERE e.pubkey IN (?,?,?) LIMIT 1",
+				Args: []any{"aaa", "bbb", "xxx"},
+			}},
+		},
+		{
+			name: "single filter, tags",
+			filters: nostr.Filters{{
+				Tags: nostr.TagMap{
+					"e": {"xxx", "yyy"},
+					"p": {"alice", "bob"},
+				},
+			}},
+			queries: []Query{{
+				SQL:  "SELECT 1 FROM events AS e WHERE e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) AND e.id IN (SELECT event_id FROM tags WHERE key = ? AND value IN (?,?)) LIMIT 1",
+				Args: []any{"e", "xxx", "yyy", "p", "alice", "bob"},
+			}},
+		},
+		{
+			name:    "single filter, no conditions",
+			filters: nostr.Filters{{}},
+			queries: []Query{{
+				SQL:  "SELECT 1 FROM events AS e LIMIT 1",
+				Args: nil,
+			}},
+		},
+		{
+			name: "multiple filters",
+			filters: nostr.Filters{
+				{Kinds: []int{0, 1}},
+				{Authors: []string{"aaa", "bbb"}},
+			},
+			queries: []Query{
+				{
+					SQL:  "SELECT 1 FROM events AS e WHERE e.kind IN (?,?) LIMIT 1",
+					Args: []any{0, 1},
+				},
+				{
+					SQL:  "SELECT 1 FROM events AS e WHERE e.pubkey IN (?,?) LIMIT 1",
+					Args: []any{"aaa", "bbb"},
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			queries, err := DefaultHasBuilder(test.filters...)
+			if err != nil {
+				t.Fatalf("expected error nil, got %v", err)
+			}
+
+			if len(queries) != len(test.queries) {
+				t.Fatalf("expected %d queries, got %d", len(test.queries), len(queries))
+			}
+
+			for i, expected := range test.queries {
+				if queries[i].SQL != expected.SQL {
+					t.Fatalf("query[%d]: expected SQL %v, got %v", i, expected.SQL, queries[i].SQL)
+				}
+
+				// compare the set of args to avoid false positives caused by argument order
+				argsSet := toSet(queries[i].Args)
+				expectedSet := toSet(expected.Args)
+				if !reflect.DeepEqual(argsSet, expectedSet) {
+					t.Fatalf("query[%d]: expected Args %v, got %v", i, expected.Args, queries[i].Args)
+				}
 			}
 		})
 	}
