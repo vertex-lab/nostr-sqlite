@@ -801,6 +801,104 @@ func TestDeleteRequest(t *testing.T) {
 	}
 }
 
+func TestDelete(t *testing.T) {
+	tests := []struct {
+		name    string
+		stored  []nostr.Event
+		filters nostr.Filters
+		err     error
+		deleted int
+	}{
+		{
+			name:    "no filters",
+			filters: nostr.Filters{},
+			deleted: 0,
+		},
+		{
+			name:    "unconstrained filter",
+			filters: nostr.Filters{{}},
+			err:     ErrUnconstrainedFilter,
+		},
+		{
+			name: "single filter, kind",
+			stored: []nostr.Event{
+				{ID: "e1", Kind: 0},
+				{ID: "e2", Kind: 0},
+				{ID: "e3", Kind: 1},
+			},
+			filters: nostr.Filters{{Kinds: []int{0}}},
+			deleted: 2,
+		},
+		{
+			name: "single filter, author",
+			stored: []nostr.Event{
+				{ID: "e1", PubKey: "alice", Kind: 1},
+				{ID: "e2", PubKey: "alice", Kind: 1},
+				{ID: "e3", PubKey: "bob", Kind: 1},
+			},
+			filters: nostr.Filters{{Authors: []string{"alice"}}},
+			deleted: 2,
+		},
+		{
+			name: "multiple filters",
+			stored: []nostr.Event{
+				{ID: "e1", Kind: 0},
+				{ID: "e2", Kind: 1},
+				{ID: "e3", Kind: 2},
+			},
+			filters: nostr.Filters{
+				{Kinds: []int{0}},
+				{Kinds: []int{1}},
+			},
+			deleted: 2,
+		},
+		{
+			name: "non-matching filter",
+			stored: []nostr.Event{
+				{ID: "e1", Kind: 0},
+			},
+			filters: nostr.Filters{{Kinds: []int{1}}},
+			deleted: 0,
+		},
+		{
+			name: "unconstrained filter among valid ones",
+			stored: []nostr.Event{
+				{ID: "e1", Kind: 0},
+			},
+			filters: nostr.Filters{
+				{Kinds: []int{0}},
+				{},
+			},
+			err:     ErrUnconstrainedFilter,
+			deleted: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := New(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+
+			for i := range test.stored {
+				if _, err := store.Save(ctx, &test.stored[i]); err != nil {
+					t.Fatalf("Save failed: %v", err)
+				}
+			}
+
+			deleted, err := store.Delete(ctx, test.filters...)
+			if !errors.Is(err, test.err) {
+				t.Fatalf("expected error %v, got %v", test.err, err)
+			}
+			if deleted != test.deleted {
+				t.Fatalf("expected %d deleted, got %d", test.deleted, deleted)
+			}
+		})
+	}
+}
+
 func BenchmarkSaveRegular(b *testing.B) {
 	path := b.TempDir() + "/test.sqlite"
 	store, err := New(path)
@@ -876,7 +974,7 @@ func BenchmarkDelete(b *testing.B) {
 
 	b.ResetTimer()
 	for i := range b.N {
-		_, err := store.Delete(ctx, ids[i])
+		_, err := store.Delete(ctx, nostr.Filter{IDs: []string{ids[i]}})
 		if err != nil {
 			b.Fatalf("Delete failed: %v", err)
 		}

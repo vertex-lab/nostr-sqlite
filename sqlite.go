@@ -18,8 +18,9 @@ import (
 
 var (
 	ErrInvalidAddressable     = errors.New("addressable event must have exactly one (non empty) 'd' tag")
-	ErrInvalidReplacement     = errors.New("called Replace on a non-replaceable event")
-	ErrInvalidDeletionRequest = errors.New("deletion request must be kind 5")
+	ErrInvalidReplacement     = errors.New("replacement event must be replaceable or addressable")
+	ErrInvalidDeletionRequest = errors.New("deletion request must be a kind 5 event")
+	ErrUnconstrainedFilter    = errors.New("filter has no conditions: use Nuke to delete all events")
 )
 
 //go:embed schema.sql
@@ -189,24 +190,49 @@ func (s *Store) Save(ctx context.Context, e *nostr.Event) (bool, error) {
 	return false, nil
 }
 
-// Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
-// Delete returns true if the event was deleted, false in case of errors or if the event was not found.
-func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := s.DB.ExecContext(ctx, "DELETE FROM events WHERE id = $1", id)
-	if err != nil {
-		return false, fmt.Errorf("failed to execute: %w", err)
+// Delete all events matching the provided filters and returns the number of deleted events.
+// It returns an error if any of the filters are unconstrained (i.e. have no conditions), which would result
+// in the deletion of all events. For this usecase, use [Store.Nuke] instead.
+func (s *Store) Delete(ctx context.Context, filters ...nostr.Filter) (int, error) {
+	if len(filters) == 0 {
+		return 0, nil
 	}
 
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("failed to check for rows affected: %w", err)
+	groups := make([]string, 0, len(filters))
+	allArgs := make([]any, 0)
+
+	for _, filter := range filters {
+		conds, args := toSQL(filter)
+		if len(conds) == 0 {
+			return 0, ErrUnconstrainedFilter
+		}
+		groups = append(groups, "("+strings.Join(conds, " AND ")+")")
+		allArgs = append(allArgs, args...)
 	}
 
-	if rows > 0 {
+	query := "DELETE FROM events AS e WHERE " + strings.Join(groups, " OR ")
+	res, err := s.DB.ExecContext(ctx, query, allArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete events: %w", err)
+	}
+
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if deleted > 0 {
 		s.checkOptimize(ctx)
-		return true, nil
 	}
-	return false, nil
+	return int(deleted), nil
+}
+
+// Nuke deletes all events from the store.
+func (s *Store) Nuke(ctx context.Context) error {
+	if _, err := s.DB.ExecContext(ctx, "DELETE FROM events"); err != nil {
+		return fmt.Errorf("failed to nuke events: %w", err)
+	}
+	s.checkOptimize(ctx)
+	return nil
 }
 
 // DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events

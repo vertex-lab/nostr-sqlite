@@ -29,25 +29,17 @@ To find all available options, see [options.go](/options.go).
 ## Minimal & Powerful API
 
 ```golang
-// Save the event in the store. Save is idempotent, meaning successful calls to Save
-// with the same event are no-ops.
-//
-// Save returns true if the event has been saved, false in case of errors or if the event was already present.
-// For replaceable/addressable events, it is recommended to call [Store.Replace] instead.
+// Save the event in the store in an idempotent way.
 Save(context.Context, *nostr.Event) (bool, error)
 
-// Delete the event with the provided id. If the event is not found, nothing happens and nil is returned.
-// Delete returns true if the event was deleted, false in case of errors or if the event was not found.
-Delete(context.Context, string) (bool, error)
-
-// DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events
-// that share the same pubkey as the deletion request. It returns the number of events deleted.
-DeleteRequest(ctx context.Context, event *nostr.Event) (int, error) {
-
 // Replace an old event with the new one according to NIP-01.
-// It returns true if the event has been saved/superseded a previous one,
-// false in case of errors or if a stored event in the same 'category' is newer or equal.
 Replace(context.Context, *nostr.Event) (bool, error)
+
+// Delete all events matching the provided filters and returns the number of deleted events.
+Delete(context.Context, ...nostr.Filter) (int, error)
+
+// DeleteRequest processes a NIP-09 deletion request (kind 5 event), deleting all referenced events.
+DeleteRequest(ctx context.Context, event *nostr.Event) (int, error)
 
 // Query stored events matching the provided filters.
 Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error)
