@@ -51,8 +51,9 @@ type Store struct {
 	optimizeEvery int32        // the threshold of writes that trigger PRAGMA optimize
 	writeCount    atomic.Int32 // successful writes since last PRAGMA optimize
 
-	filterPolicy FilterPolicy
-	eventPolicy  EventPolicy
+	eventPolicy EventPolicy
+	countPolicy FilterPolicy
+	queryPolicy FilterPolicy
 
 	queryBuilder QueryBuilder
 	countBuilder QueryBuilder
@@ -84,8 +85,9 @@ func New(path string, opts ...Option) (*Store, error) {
 	store := &Store{
 		DB:            db,
 		optimizeEvery: 5000,
-		filterPolicy:  DefaultFilterPolicy,
 		eventPolicy:   DefaultEventPolicy,
+		queryPolicy:   DefaultQueryPolicy,
+		countPolicy:   DefaultCountPolicy,
 		queryBuilder:  DefaultQueryBuilder,
 		countBuilder:  DefaultCountBuilder,
 	}
@@ -435,17 +437,12 @@ func (s *Store) replace(
 
 // Query stored events matching the provided filters.
 func (s *Store) Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error) {
-	return s.QueryWithBuilder(ctx, s.queryBuilder, filters...)
-}
-
-// QueryWithBuilder generates an sqlite query for the filters with the provided [QueryBuilder], and executes it.
-func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filters ...nostr.Filter) ([]nostr.Event, error) {
-	filters, err := s.filterPolicy(filters...)
+	filters, err := s.queryPolicy(filters...)
 	if err != nil {
 		return nil, err
 	}
 
-	queries, err := build(filters...)
+	queries, err := s.queryBuilder(filters...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
@@ -482,12 +479,12 @@ func (s *Store) QueryWithBuilder(ctx context.Context, build QueryBuilder, filter
 
 // Count stored events matching the provided filters.
 func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, error) {
-	return s.CountWithBuilder(ctx, s.countBuilder, filters...)
-}
+	filters, err := s.countPolicy(filters...)
+	if err != nil {
+		return 0, err
+	}
 
-// CountWithBuilder generates an sqlite query for the filters with the provided [QueryBuilder], and executes it.
-func (s *Store) CountWithBuilder(ctx context.Context, build QueryBuilder, filters ...nostr.Filter) (int64, error) {
-	queries, err := build(filters...)
+	queries, err := s.countBuilder(filters...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to build count query: %w", err)
 	}

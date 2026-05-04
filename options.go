@@ -93,19 +93,36 @@ func WithoutEventPolicy() Option {
 	}
 }
 
-// WithFilterPolicy sets a custom filter policy on the Store, which will be used to validate and modify
+// WithQueryPolicy sets a custom query policy on the Store, which will be used to validate and modify
 // filters before executing queries.
-func WithFilterPolicy(p FilterPolicy) Option {
+func WithQueryPolicy(p FilterPolicy) Option {
 	return func(s *Store) error {
-		s.filterPolicy = p
+		s.queryPolicy = p
 		return nil
 	}
 }
 
-// WithoutFilterPolicy removes any filter policy from the store.
-func WithoutFilterPolicy() Option {
+// WithoutQueryPolicy removes any query policy from the store.
+func WithoutQueryPolicy() Option {
 	return func(s *Store) error {
-		s.filterPolicy = NoFilterPolicy
+		s.queryPolicy = NoFilterPolicy
+		return nil
+	}
+}
+
+// WithCountPolicy sets a custom query policy on the Store, which will be used to validate and modify
+// filters before executing count queries.
+func WithCountPolicy(p FilterPolicy) Option {
+	return func(s *Store) error {
+		s.countPolicy = p
+		return nil
+	}
+}
+
+// WithoutCountPolicy removes any count policy from the store.
+func WithoutCountPolicy() Option {
+	return func(s *Store) error {
+		s.countPolicy = NoFilterPolicy
 		return nil
 	}
 }
@@ -149,18 +166,17 @@ type FilterPolicy func(...nostr.Filter) (nostr.Filters, error)
 
 var NoFilterPolicy FilterPolicy = func(filters ...nostr.Filter) (nostr.Filters, error) { return filters, nil } // no-op filter policy
 
-// DefaultFilterPolicy enforces 4 rules:
+// DefaultQueryPolicy enforces 4 rules:
 //  1. Filters must be less than 200.
 //  2. Filters can't have the "search" field, as NIP-50 is not supported by default.
 //  3. Filters with LimitZero set are ignored (i.e., removed).
 //  4. Remaining filters must have a Limit > 0.
 //
 // It returns the cleaned list of filters or an error.
-func DefaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
+func DefaultQueryPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
 	if len(filters) > 200 {
 		return nil, fmt.Errorf("filters must be less than 200: %d", len(filters))
 	}
-
 	if containSearch(filters) {
 		return nil, errors.New("NIP-50 search is not supported")
 	}
@@ -175,6 +191,19 @@ func DefaultFilterPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
 		}
 	}
 	return result, nil
+}
+
+// DefaultCountPolicy enforces 2 rules:
+//  1. Filters must be less than 200.
+//  2. Filters can't have the "search" field, as NIP-50 is not supported by default.
+func DefaultCountPolicy(filters ...nostr.Filter) (nostr.Filters, error) {
+	if len(filters) > 200 {
+		return nil, fmt.Errorf("filters must be less than 200: %d", len(filters))
+	}
+	if containSearch(filters) {
+		return nil, errors.New("NIP-50 search is not supported")
+	}
+	return filters, nil
 }
 
 func containSearch(filters nostr.Filters) bool {
