@@ -45,7 +45,7 @@ DeleteRequest(ctx context.Context, event *nostr.Event) (int, error)
 Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error)
 
 // Count stored events matching the provided filters.
-Count(ctx context.Context, filters ...nostr.Filter) (int64, error)
+Count(ctx context.Context, filters ...nostr.Filter) (int, error)
 
 // Has returns true if the store contains at least one event matching the provided filters.
 Has(ctx context.Context, filters ...nostr.Filter) (bool, error)

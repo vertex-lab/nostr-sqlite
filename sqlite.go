@@ -508,7 +508,7 @@ func (s *Store) Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Eve
 // Count stored events matching the provided filters.
 // The filters are validated and modified by the [Store.countPolicy] before executing the query.
 // The query is built using the [Store.countBuilder] and executed against the database.
-func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, error) {
+func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int, error) {
 	filters, err := s.countPolicy(filters...)
 	if err != nil {
 		return 0, err
@@ -530,7 +530,7 @@ func (s *Store) Count(ctx context.Context, filters ...nostr.Filter) (int64, erro
 
 		total += count
 	}
-	return total, nil
+	return int(total), nil
 }
 
 // Has returns true if the store contains at least one event matching the provided filters.
