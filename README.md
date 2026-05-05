@@ -13,7 +13,7 @@ go get github.com/vertex-lab/nostr-sqlite
 
 ## Simple & Customizable
 
-Nostr-sqlite works out of the box, no need to configure anything more than the database path. However, it allows you to customize your database to fit your needs, giving you access to the underlying `*sql.DB` connection, and allowing convenient setup using functional options.
+Nostr-sqlite works out of the box, no need to configure anything more than the database path. However, it allows you to customize your database to fit your needs, giving you access to the underlying `*sql.DB` connection pool, and allowing convenient setup using functional options.
 
 ```golang
 store, err := sqlite.New(
@@ -47,7 +47,7 @@ Query(ctx context.Context, filters ...nostr.Filter) ([]nostr.Event, error)
 // Count stored events matching the provided filters.
 Count(ctx context.Context, filters ...nostr.Filter) (int, error)
 
-// Has returns true if the store contains at least one event matching the provided filters.
+// Has returns true if the store contains at least one event matching any of the provided filters.
 Has(ctx context.Context, filters ...nostr.Filter) (bool, error)
 ```
 
